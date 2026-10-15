@@ -1,2 +1,16 @@
+#构建产物
 /Chassis/build/
 /Gimbal/build/
+*.o
+*.d
+*.a
+*.elf
+*.hex
+*.bin
+*.map
+
+# 编辑器/系统临时文件
+.vscode/ipch/
+*.code-workspace.bak
+Thumbs.db
+.DS_Store
