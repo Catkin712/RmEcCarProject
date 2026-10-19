@@ -86,7 +86,7 @@ int main(void)
   HAL_Init();
 
   /* USER CODE BEGIN Init */
-
+  __HAL_DBGMCU_FREEZE_IWDG(); /* 调试器 halt 时冻结看门狗 */
   /* USER CODE END Init */
 
   /* Configure the system clock */
@@ -122,7 +122,7 @@ int main(void)
   while (1)
   {
     /* USER CODE END WHILE */
-
+    HAL_IWDG_Refresh(&hiwdg); /* 临时喂狗；任务 10 改成“通信有效才刷新” */
     /* USER CODE BEGIN 3 */
   }
   /* USER CODE END 3 */
