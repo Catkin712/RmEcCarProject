@@ -15,9 +15,19 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main_task.hpp"
 #include "comm_task.hpp"
+#include "ins_motor.hpp"
+
+/* Private constants ---------------------------------------------------------*/
+namespace
+{
+  /* 轮电机、舵电机各 4 个。 */
+  constexpr int kWheelNum = 4;
+  constexpr int kSteerNum = 4;
+}
 
 /* Exported function definitions ---------------------------------------------*/
-void MainTaskInit(void) {
+void MainTaskInit(void)
+{
   /* TODO【新人任务】:
    * 一次性初始化（由 main() 在 while(1) 之前调用一次）：
    *   1. 通过 Instance 层的 GetXxx() 拿到电机 / IMU / 遥控器 / 双板通讯 / Robot 等对象，
@@ -26,9 +36,19 @@ void MainTaskInit(void) {
    *   3. 调用 CommTaskInit() 完成通讯初始化（UART 接收、IWDG 等）。
    * 注意：不要在这里写任何周期性逻辑。
    */
+  for (int i = 0; i < kWheelNum; ++i) // 电机单例化
+  {
+    (void)GetMotorWheel(i);
+  }
+  for (int i = 0; i < kSteerNum; ++i)
+  {
+    (void)GetMotorSteer(i);
+  }
+  CommTaskInit(); // 通讯层：滤波 → Start → 使能中断
 }
 
-void MainTask(void) {
+void MainTask(void)
+{
   /* TODO【新人任务】:
    * 1ms 控制周期入口：调用 robot->update()，由状态机完成
    * 「读数据 → 迁移 → 生成指令 → 下发」的整条链路。

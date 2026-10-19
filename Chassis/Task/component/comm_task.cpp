@@ -14,9 +14,12 @@
  */
 /* Includes ------------------------------------------------------------------*/
 #include "comm_task.hpp"
+#include "HW_can.hpp"
+#include "can.h"
 
 /* Exported function definitions ---------------------------------------------*/
-void CommTaskInit(void) {
+void CommTaskInit(void)
+{
   /* TODO【新人任务】:
    * 通讯层一次性初始化：
    *   1. 初始化 CAN 滤波器：inc/HW_can.hpp 的 CanFilter_Init(&hcan1) / CanFilter_Init(&hcan2)。
@@ -24,9 +27,18 @@ void CommTaskInit(void) {
    *      调用 HAL_UARTEx_ReceiveToIdle_DMA 并记录接收缓冲区。
    *   3. 启动 / 刷新独立看门狗 IWDG（inc/iwdg.h）。
    */
+  CanFilter_Init(&hcan1);
+  CanFilter_Init(&hcan2);
+
+  HAL_CAN_Start(&hcan1);
+  HAL_CAN_Start(&hcan2);
+
+  HAL_CAN_ActivateNotification(&hcan1, CAN_IT_RX_FIFO0_MSG_PENDING);
+  HAL_CAN_ActivateNotification(&hcan2, CAN_IT_RX_FIFO1_MSG_PENDING);
 }
 
-void CommTask(void) {
+void CommTask(void)
+{
   /* TODO【新人任务】:
    * 每个通讯周期（1ms）调用一次，把各模块 encode 出的 8 字节 CAN 帧发出去：
    *   1. 遍历电机：调用 encode(data) 得到 8 字节 + tx_id()，再 CAN_Send_Msg 发出。
