@@ -21,6 +21,9 @@
 #include "HW_can.hpp"
 
 #include "can.h"
+#include "ins_motor.hpp"    /* GetMotorWheel / GetMotorSteer */
+#include "motor_GM6020.hpp" /* GM6020::GetRxId */
+#include "motor_M3508.hpp"  /* M3508::GetRxId */
 
 /* Private variables ---------------------------------------------------------*/
 static CAN_RxHeaderTypeDef rx_header1;
@@ -29,6 +32,28 @@ static uint8_t can1_rx_data[8];
 static uint8_t can2_rx_data[8];
 static uint32_t p_tx_mailbox;
 
+// Ozone观察用
+static volatile uint32_t can1_rx_cnt = 0;          /* CAN1 成功取走的帧数 */
+static volatile uint32_t can2_rx_cnt = 0;          /* CAN2 成功取走的帧数 */
+static volatile uint32_t can1_unknown_cnt = 0;     /* CAN1 未命中任何路由的帧数 */
+static volatile uint32_t can2_unknown_cnt = 0;     /* CAN2 未命中任何路由的帧数 */
+static volatile uint32_t can1_last_unknown_id = 0; /* 最近一个未命中的 ID */
+static volatile uint32_t can2_last_unknown_id = 0;
+
+namespace
+{
+  /* 与 ins_motor.cpp 里的同名常量各自独立。
+   * 这是有意的重复：路由层要知道"遍历几个"，但不想为此改动 Instance 层接口。
+   * 数量变化时两处都要改——这是当前设计的已知代价。 */
+  constexpr int kWheelNum = 4;
+  constexpr int kSteerNum = 4;
+} // namespace
+
+/* Private function prototypes -----------------------------------------------*/
+static void RouteCan1Frame(const CAN_RxHeaderTypeDef *header,
+                           const uint8_t data[8]);
+static void RouteCan2Frame(const CAN_RxHeaderTypeDef *header,
+                           const uint8_t data[8]);
 /* Exported function definitions ---------------------------------------------*/
 
 void CanFilter_Init(CAN_HandleTypeDef *hcan)
@@ -44,30 +69,39 @@ void CanFilter_Init(CAN_HandleTypeDef *hcan)
   can_filter.FilterMaskIdLow = 0x0000;
   can_filter.FilterActivation = ENABLE;
 
-  if (hcan == &hcan1) {
+  if (hcan == &hcan1)
+  {
     can_filter.FilterFIFOAssignment = CAN_FILTER_FIFO0;
     can_filter.FilterBank = 0;
-  } else if (hcan == &hcan2) {
+  }
+  else if (hcan == &hcan2)
+  {
     can_filter.FilterFIFOAssignment = CAN_FILTER_FIFO1;
     can_filter.FilterBank = 14;
-  } else {
+  }
+  else
+  {
     return;
   }
 
-  if (HAL_CAN_ConfigFilter(hcan, &can_filter) != HAL_OK) {
+  if (HAL_CAN_ConfigFilter(hcan, &can_filter) != HAL_OK)
+  {
     Error_Handler();
   }
 }
 
-void CAN_Send_Msg(CAN_HandleTypeDef *hcan, uint8_t *msg, uint32_t id,
-                  uint8_t len)
+HAL_StatusTypeDef CAN_Send_Msg(CAN_HandleTypeDef *hcan, const uint8_t *msg,
+                               uint32_t id, uint8_t len)
 {
   CAN_TxHeaderTypeDef tx_header = {0};
   tx_header.StdId = id;
   tx_header.IDE = CAN_ID_STD;
   tx_header.RTR = CAN_RTR_DATA;
   tx_header.DLC = len;
-  HAL_CAN_AddTxMessage(hcan, &tx_header, msg, &p_tx_mailbox);
+
+  uint32_t mailbox = 0;
+
+  return HAL_CAN_AddTxMessage(hcan, &tx_header, msg, &mailbox);
 }
 
 /**
@@ -78,33 +112,105 @@ void CAN_Send_Msg(CAN_HandleTypeDef *hcan, uint8_t *msg, uint32_t id,
  */
 void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
 {
-  if (hcan == &hcan1) {
+  if (hcan == &hcan1)
+  {
     if (HAL_CAN_GetRxMessage(hcan, CAN_RX_FIFO0, &rx_header1,
-                             can1_rx_data) == HAL_OK) {
-      /* TODO【新人任务】: 在此按 rx_header1.StdId 路由 8 字节 can1_rx_data。
-       * 判定方法：把 StdId 与各电机的接收 ID（GetRxId）及双板通讯帧 ID 逐一比对：
-       *   - 命中某电机的接收 ID：调用该电机 decode(can1_rx_data) 解包反馈；
-       *   - 命中双板通讯帧 ID：调用自己的 GimbalChassisComm 解码；
-       *   - 都未命中：丢弃（返回前记得重新使能接收中断，见下方调用）。
-       */
+                             can1_rx_data) == HAL_OK)
+    {
+      can1_rx_cnt = can1_rx_cnt + 1U;            /* 新增：成功取走一帧才计数 */
+      RouteCan1Frame(&rx_header1, can1_rx_data); /* 新增：分发 */
     }
   }
   HAL_CAN_ActivateNotification(hcan, CAN_IT_RX_FIFO0_MSG_PENDING);
 }
-
 /**
  * @brief   CAN2 FIFO1 接收中断回调（新人填写分发逻辑）
  * @param   hcan: CAN 句柄
  * @retval  None
  * @note    同上，具体分发由新人实现
  */
+
 void HAL_CAN_RxFifo1MsgPendingCallback(CAN_HandleTypeDef *hcan)
 {
-  if (hcan == &hcan2) {
+  if (hcan == &hcan2)
+  {
     if (HAL_CAN_GetRxMessage(hcan, CAN_RX_FIFO1, &rx_header2,
-                             can2_rx_data) == HAL_OK) {
-      /* TODO【新人任务】: 同 FIFO0，按 rx_header2.StdId 路由 8 字节 can2_rx_data。 */
+                             can2_rx_data) == HAL_OK)
+    {
+      can2_rx_cnt = can2_rx_cnt + 1U;            /* 新增：成功取走一帧才计数 */
+      RouteCan2Frame(&rx_header2, can2_rx_data); /* 新增：分发 */
     }
   }
   HAL_CAN_ActivateNotification(hcan, CAN_IT_RX_FIFO1_MSG_PENDING);
+}
+
+/* Private function definitions ----------------------------------------------*/
+
+static void RouteCan1Frame(const CAN_RxHeaderTypeDef *header,
+                           const uint8_t data[8])
+{
+  /* ① 只处理标准数据帧。
+   *    IDE != CAN_ID_STD：扩展帧（29 位 ID），本项目不用。
+   *    RTR != CAN_RTR_DATA：远程帧，没有数据段。 */
+  if (header->IDE != CAN_ID_STD || header->RTR != CAN_RTR_DATA)
+  {
+    can1_unknown_cnt = can1_unknown_cnt + 1U;
+    can1_last_unknown_id = header->StdId;
+    return;
+  }
+
+  /* ② 电机反馈固定 8 字节；短帧不喂给 decode（decode 无条件读 data[0..7]）。 */
+  if (header->DLC != 8U)
+  {
+    can1_unknown_cnt = can1_unknown_cnt + 1U;
+    can1_last_unknown_id = header->StdId;
+    return;
+  }
+
+  /* ③ 遍历舵电机，用电机自己记录的 id 反查接收 ID。*/
+  for (int idx = 0; idx < kSteerNum; ++idx)
+  {
+    hello_world::motor::Motor *motor = GetMotorSteer(idx);
+    if (hello_world::motor::GM6020::GetRxId(motor->id()) == header->StdId) // 命中
+    {
+      (void)motor->decode(data);
+      return;
+    }
+  }
+
+  /* ④ 未命中：计数 + 记录 ID*/
+  can1_unknown_cnt = can1_unknown_cnt + 1U;
+  can1_last_unknown_id = header->StdId;
+}
+
+static void RouteCan2Frame(const CAN_RxHeaderTypeDef *header, //
+                           const uint8_t data[8])
+{
+  if (header->IDE != CAN_ID_STD || header->RTR != CAN_RTR_DATA)
+  {
+    can2_unknown_cnt = can2_unknown_cnt + 1U;
+    can2_last_unknown_id = header->StdId;
+    return;
+  }
+
+  if (header->DLC != 8U)
+  {
+    can2_unknown_cnt = can2_unknown_cnt + 1U;
+    can2_last_unknown_id = header->StdId;
+    return;
+  }
+
+  /* ③ 遍历轮电机*/
+  for (int idx = 0; idx < kWheelNum; ++idx)
+  {
+    hello_world::motor::Motor *motor = GetMotorWheel(idx);
+    if (hello_world::motor::M3508::GetRxId(motor->id()) == header->StdId)
+    {
+      (void)motor->decode(data);
+      return;
+    }
+  }
+
+  can2_unknown_cnt = can2_unknown_cnt + 1U;
+  can2_last_unknown_id = header->StdId;
 }

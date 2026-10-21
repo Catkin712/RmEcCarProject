@@ -14,15 +14,29 @@
  */
 /* Includes ------------------------------------------------------------------*/
 #include "comm_task.hpp"
+
 #include "HW_can.hpp"
 #include "can.h"
+#include "ins_motor.hpp"    /* GetMotorWheel / GetMotorSteer */
+#include "motor_GM6020.hpp" /* GM6020::GetTxId */
+#include "motor_M3508.hpp"  /* M3508::GetTxId */
+
+/* Private constants ---------------------------------------------------------*/
+namespace
+{
+  constexpr int kWheelNum = 4;
+  constexpr int kSteerNum = 4;
+} // namespace
+
+/* Private function prototypes -----------------------------------------------*/
+static void TransmitWheelFrame(void);
+static void TransmitSteerFrame(void);
 
 /* Exported function definitions ---------------------------------------------*/
 void CommTaskInit(void)
 {
   /* TODO【新人任务】:
    * 通讯层一次性初始化：
-   *   1. 初始化 CAN 滤波器：inc/HW_can.hpp 的 CanFilter_Init(&hcan1) / CanFilter_Init(&hcan2)。
    *   2. 启动遥控器串口空闲 + DMA 接收（18 字节 DBUS，见 inc/DT7.hpp 注释）：
    *      调用 HAL_UARTEx_ReceiveToIdle_DMA 并记录接收缓冲区。
    *   3. 启动 / 刷新独立看门狗 IWDG（inc/iwdg.h）。
@@ -41,13 +55,41 @@ void CommTask(void)
 {
   /* TODO【新人任务】:
    * 每个通讯周期（1ms）调用一次，把各模块 encode 出的 8 字节 CAN 帧发出去：
-   *   1. 遍历电机：调用 encode(data) 得到 8 字节 + tx_id()，再 CAN_Send_Msg 发出。
    *   2. 双板通讯对象 encode 后同样发送。
    *   3. 刷新 IWDG。
    */
+  TransmitWheelFrame();
+  TransmitSteerFrame();
 }
 
 /* Private function definitions ----------------------------------------------*/
+static void TransmitWheelFrame(void)
+{
+  uint8_t tx_data[8] = {0};
+
+  for (int i = 0; i < kWheelNum; ++i)
+  {
+    (void)GetMotorWheel(i)->encode(tx_data);
+  }
+
+  // 用共享发送 ID 发出去。
+  (void)CAN_Send_Msg(&hcan2, tx_data,
+                     hello_world::motor::M3508::GetTxId(GetMotorWheel(0)->id()), 8);
+}
+
+static void TransmitSteerFrame(void)
+{
+  uint8_t tx_data[8] = {0}; /* 同 E：必须清零 */
+
+  for (int i = 0; i < kSteerNum; ++i)
+  {
+    (void)GetMotorSteer(i)->encode(tx_data); /* 同 F */
+  }
+
+  hello_world::motor::InputType in_type = GetMotorSteer(0)->get_input_type();
+  (void)CAN_Send_Msg(&hcan1, tx_data,
+                     hello_world::motor::GM6020::GetTxId(GetMotorSteer(0)->id(), in_type), 8);
+}
 /* TODO【新人任务】:
  * 实现 UART 空闲中断回调 HAL_UARTEx_RxEventCallback：
  *   - 收到满 18 字节后调用 DT7.decode() 解包遥控器数据，并重新启动下一轮接收；

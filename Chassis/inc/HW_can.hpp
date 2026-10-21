@@ -26,27 +26,27 @@
 #include "stm32_hal.hpp"
 
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
 
-/**
- * @brief       CAN 滤波器初始化（全收：不过滤任何 ID）
- * @param       hcan: CAN 句柄（&hcan1 或 &hcan2）
- * @retval      None
- * @note        hcan1 配置到 FIFO0、bank0；hcan2 配置到 FIFO1、bank14
- */
-void CanFilter_Init(CAN_HandleTypeDef *hcan);
+    /**
+     * @brief       CAN 滤波器初始化（全收：不过滤任何 ID）
+     * @param       hcan: CAN 句柄（&hcan1 或 &hcan2）
+     * @retval      None
+     * @note        hcan1 配置到 FIFO0、bank0；hcan2 配置到 FIFO1、bank14
+     */
+    void CanFilter_Init(CAN_HandleTypeDef *hcan);
 
-/**
- * @brief       向 CAN 总线发送一帧标准帧
- * @param       hcan: CAN 句柄
- * @param       msg: 待发送的 8 字节数据首地址
- * @param       id: 标准帧 ID（11 位）
- * @param       len: 数据长度（字节数，一般 8）
- * @retval      None
- */
-void CAN_Send_Msg(CAN_HandleTypeDef *hcan, uint8_t *msg, uint32_t id,
-                  uint8_t len);
+    /**
+     * @brief       向 CAN 总线发送一帧标准帧
+     * @param       hcan: CAN 句柄
+     * @param       msg: 待发送的 8 字节数据首地址
+     * @param       id: 标准帧 ID（11 位）
+     * @param       len: 数据长度（字节数，一般 8）
+     * @retval      None
+     */
+    HAL_StatusTypeDef CAN_Send_Msg(CAN_HandleTypeDef *hcan, const uint8_t *msg, uint32_t id, uint8_t len);
 
 #ifdef __cplusplus
 }

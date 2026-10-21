@@ -38,9 +38,12 @@
  *
  * 【调用时机】必须在任何中断使能之前完成首次调用（初始化会在此惰性执行）。
  */
-/* 获取第 idx 号轮电机单例（M3508，共 4 个，idx ∈ [0,4)）。 */
 hello_world::motor::Motor *GetMotorWheel(int idx);
-/* 获取第 idx 号舵电机单例（GM6020，共 4 个，idx ∈ [0,4)）。 */
+/* 获取第 idx 号舵电机单例（GM6020，共 4 个，idx ∈ [0,4)）。
+ * 【越界契约】idx 越界由 HW_ASSERT 拦截（关中断死循环）。
+ * 【id 约定】id = idx + 1（idx0↔id1 …）。注意 GM6020 的 id 范围是 1~7
+ * 【调用时机】必须在任何中断使能之前完成首次调用。
+ */
 hello_world::motor::Motor *GetMotorSteer(int idx);
 
 #endif /* CHASSIS_INSTANCE_INS_MOTOR_HPP_ */
