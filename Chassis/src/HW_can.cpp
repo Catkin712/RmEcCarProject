@@ -30,7 +30,6 @@ static CAN_RxHeaderTypeDef rx_header1;
 static CAN_RxHeaderTypeDef rx_header2;
 static uint8_t can1_rx_data[8];
 static uint8_t can2_rx_data[8];
-static uint32_t p_tx_mailbox;
 
 // Ozone观察用
 static volatile uint32_t can1_rx_cnt = 0;          /* CAN1 成功取走的帧数 */

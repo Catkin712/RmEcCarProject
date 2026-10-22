@@ -14,8 +14,10 @@
  */
 /* Includes ------------------------------------------------------------------*/
 #include "main_task.hpp"
+
 #include "comm_task.hpp"
 #include "ins_motor.hpp"
+#include "tim.h"
 
 /* Private constants ---------------------------------------------------------*/
 namespace
@@ -57,11 +59,11 @@ void MainTask(void)
 }
 
 /* Private function definitions ----------------------------------------------*/
-/* TODO【新人任务】:
- * 实现 htim6 周期中断回调 HAL_TIM_PeriodElapsedCallback：
- *   - 先判中断来自 htim6（避免把别的定时器中断误当成 1ms tick）；
- *   - 再调用 MainTask() 与 CommTask()。
- * 注意：
- *   - main.c 已 HAL_TIM_Base_Start_IT(&htim6)，这里只需补中断里的分发；
- *   - HAL 回调是 C 链接，需用 extern "C" 包裹，否则中断里找不到符号。
- */
+extern "C" void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
+{
+  if (htim == &htim6)
+  {
+    MainTask();
+    CommTask();
+  }
+}
