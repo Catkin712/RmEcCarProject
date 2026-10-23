@@ -21,12 +21,21 @@
 #include "motor_GM6020.hpp" /* GM6020::GetTxId */
 #include "motor_M3508.hpp"  /* M3508::GetTxId */
 
+#include "ins_comm.hpp" /* GetRemoteControl */
+#include "usart.h"      /* huart3 */
+
 /* Private constants ---------------------------------------------------------*/
 namespace
 {
   constexpr int kWheelNum = 4;
   constexpr int kSteerNum = 4;
 } // namespace
+
+/* Private variables ---------------------------------------------------------*/
+static uint8_t dbus_rx_buf[hello_world::remote_control::kRcRxDataLen];
+/* Ozone 观察用 */
+static volatile uint32_t rc_rx_cnt = 0;  /* 成功解包的帧数 */
+static volatile uint32_t rc_err_cnt = 0; /* 长度不对、被丢弃的次数 */
 
 /* Private function prototypes -----------------------------------------------*/
 static void TransmitWheelFrame(void);
@@ -49,6 +58,10 @@ void CommTaskInit(void)
 
   HAL_CAN_ActivateNotification(&hcan1, CAN_IT_RX_FIFO0_MSG_PENDING);
   HAL_CAN_ActivateNotification(&hcan2, CAN_IT_RX_FIFO1_MSG_PENDING);
+
+  // 启动 DBUS 接收（空闲中断 + DMA）
+  (void)HAL_UARTEx_ReceiveToIdle_DMA(
+      &huart3, dbus_rx_buf, hello_world::remote_control::kRcRxDataLen);
 }
 
 void CommTask(void)
@@ -60,6 +73,37 @@ void CommTask(void)
    */
   TransmitWheelFrame();
   TransmitSteerFrame();
+}
+
+/* 实现 UART 空闲中断回调 HAL_UARTEx_RxEventCallback：
+ - 收到满 18 字节后调用 DT7.decode() 解包遥控器数据，并重新启动下一轮接收； */
+extern "C" void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart,
+                                           uint16_t Size)
+{
+  if (huart != &huart3)
+  {
+    return;
+  }
+  if (huart->RxEventType == HAL_UART_RXEVENT_HT)
+  {
+    return;
+  }
+  /* ②  只处理完整的一帧：长度必须等于 18。
+   *    线路中途空闲 Size<18 丢弃并计数。 */
+  if (Size == hello_world::remote_control::kRcRxDataLen)
+  {
+    GetRemoteControl()->decode(dbus_rx_buf);
+    rc_rx_cnt = rc_rx_cnt + 1U;
+  }
+  else
+  {
+    rc_err_cnt = rc_err_cnt + 1U;
+  }
+
+  /*    重启接收：DMA 为 NORMAL 时 HAL 已在 IDLE 里把状态复位成 READY，
+   *    所以这里可以安全重启。每次重启都对齐到"下一帧的起点"。 */
+  (void)HAL_UARTEx_ReceiveToIdle_DMA(
+      &huart3, dbus_rx_buf, hello_world::remote_control::kRcRxDataLen);
 }
 
 /* Private function definitions ----------------------------------------------*/
@@ -90,10 +134,3 @@ static void TransmitSteerFrame(void)
   (void)CAN_Send_Msg(&hcan1, tx_data,
                      hello_world::motor::GM6020::GetTxId(GetMotorSteer(0)->id(), in_type), 8);
 }
-/* TODO【新人任务】:
- * 实现 UART 空闲中断回调 HAL_UARTEx_RxEventCallback：
- *   - 收到满 18 字节后调用 DT7.decode() 解包遥控器数据，并重新启动下一轮接收；
- *   - 该回调同样是 C 链接（extern "C"）。
- * 注意：CAN 的接收分发在 src/HW_can.cpp 的两个回调里（电机 decode / 双板协议解码），
- *      不要在这里重复写 CAN 接收逻辑。
- */
