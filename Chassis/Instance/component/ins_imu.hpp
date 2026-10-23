@@ -17,18 +17,14 @@
 #define CHASSIS_INSTANCE_INS_IMU_HPP_
 
 /* Includes ------------------------------------------------------------------*/
+#include "imu.hpp"
 
 /* Exported macro ------------------------------------------------------------*/
 /* Exported constants --------------------------------------------------------*/
 /* Exported types ------------------------------------------------------------*/
-namespace hello_world {
-namespace imu {
-class Imu;
-}  // namespace imu
-}  // namespace hello_world
 /* Exported variables --------------------------------------------------------*/
 /* Exported function prototypes ----------------------------------------------*/
-/* 获取本板 IMU（姿态传感器）单例。Imu 类由你在 inc/imu.hpp 补全。 */
+/* 获取本板 IMU（姿态传感器）单例。 */
 hello_world::imu::Imu *GetImu();
 
 #endif /* CHASSIS_INSTANCE_INS_IMU_HPP_ */

@@ -26,21 +26,68 @@
 
 /* Includes ------------------------------------------------------------------*/
 #include "BMI088.hpp"
+#include "ahrs.hpp" /* 需要 ahrs::Mahony 的完整定义（组合成员） */
 
-/* ============================================================================
- * 【新人任务】在本文件编写 Imu 封装类（namespace hello_world::imu）。
- *
- * 你要做：
- *   1. 组合已提供的 BMI088（芯片原始读取，加速度 m/s² / 角速度 rad/s，见 BMI088.hpp）
- *      与 Mahony（姿态解算 update(acc, gyro) → getEulerAngle，见 mahony.hpp / ahrs.hpp）。
- *   2. 实现开机零漂：静止采样一段时间的角速度均值，后续每帧扣除该零漂再送入 Mahony。
- *   3. 对外提供 roll() / pitch() / yaw()（单位 rad），以及标定是否完成的查询。
- *
- * 约束 / 提示：
- *   - Mahony 的加速度输入需含重力加速度项，单位与坐标系（x 前 y 左 z 上）见 ahrs_base.hpp。
- *   - 零漂未收敛前，底盘 / 云台状态机应保持在 Dead / Resurrection，不得进入 Working。
- *   - 本骨架只提供了 imu.hpp（无 imu.cpp）；若需 .cpp 实现文件，可自行在 src/ 下新增
- *     imu.cpp（CMake 已递归 glob *.c*，无需改配置）。
- * ==========================================================================*/
+namespace hello_world
+{
+    namespace imu
+    {
+
+        class Imu
+        {
+        public:
+            Imu(void) = default;
+            ~Imu(void) = default;
+
+            /**
+             * @brief  IMU 初始化
+             * @param  hw_config        SPI 句柄与两路片选
+             * @param  rot_mat_flatten  芯片坐标系→机体坐标系 的旋转矩阵（展平 9 个元素）
+             * @param  samp_freq_hz     update() 的调用频率，必须与实际调用周期一致
+             * @retval true = 芯片初始化成功
+             * @note   【空位 N 之外的另一处】失败时不要断言，返回 false 并让上层查询 init_err()
+             */
+            bool init(const BMI088HWConfig &hw_config, const float rot_mat_flatten[9],
+                      float samp_freq_hz);
+
+            /**
+             * @brief  周期调用（建议 1 ms）：读芯片 → 扣零漂 → 更新姿态
+             * @note   SPI 读是阻塞的，约 30~50 µs，不要在 1 ms 内调用多次
+             */
+            void update(void);
+
+            /* 姿态角，单位 rad（Z-Y-X 欧拉角） */
+            float roll(void) const { return euler_[0]; }
+            float pitch(void) const { return euler_[1]; }
+            float yaw(void) const { return euler_[2]; }
+
+            /* 状态查询 */
+            bool is_ok(void) const { return init_err_ == kBMI088ErrStateNoErr; }
+            BMI088ErrState init_err(void) const { return init_err_; }
+            bool is_calibrated(void) const { return calibrated_; }
+            float calib_progress(void) const;
+
+            /* 调试用：原始数据与零漂估计 */
+            const float *acc(void) const { return acc_; }
+            const float *gyro(void) const { return gyro_; }
+            const float *gyro_bias(void) const { return gyro_bias_; }
+
+        private:
+            /* 组合：Imu "有一个" 芯片 和 "有一个" 解算器 */
+            BMI088 bmi088_{};
+            ahrs::Mahony mahony_{};
+
+            float acc_[3] = {0.0f, 0.0f, 0.0f};       /* m/s² */
+            float gyro_[3] = {0.0f, 0.0f, 0.0f};      /* rad/s */
+            float gyro_bias_[3] = {0.0f, 0.0f, 0.0f}; /* rad/s，零漂估计值 */
+            float euler_[3] = {0.0f, 0.0f, 0.0f};     /* rad */
+
+            uint32_t calib_cnt_ = 0;
+            bool calibrated_ = false;
+            BMI088ErrState init_err_ = kBMI088ErrStateNoErr;
+        };
+
+    } // namespace imu
+} // namespace hello_world
 
 #endif /* HW_COMPONENTS_DEVICES_IMU_IMU_HPP_ */
