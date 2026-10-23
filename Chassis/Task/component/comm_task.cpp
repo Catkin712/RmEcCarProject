@@ -23,6 +23,7 @@
 
 #include "ins_comm.hpp" /* GetRemoteControl */
 #include "usart.h"      /* huart3 */
+#include "tick.hpp"     /* hello_world::tick::GetTickMs() */
 
 /* Private constants ---------------------------------------------------------*/
 namespace
@@ -133,4 +134,30 @@ static void TransmitSteerFrame(void)
   hello_world::motor::InputType in_type = GetMotorSteer(0)->get_input_type();
   (void)CAN_Send_Msg(&hcan1, tx_data,
                      hello_world::motor::GM6020::GetTxId(GetMotorSteer(0)->id(), in_type), 8);
+}
+
+/**
+ * @brief  遥控器是否在线
+ * @retval true = 最近 100 ms 内收到过新帧
+ * @note   rc_rx_cnt 是 static（本文件私有），所以这个判断只能放在本文件。
+ *         不能只看"计数为 0"：上电初期本来就是 0，判据是"一段时间内有没有变化"。
+ */
+bool RcIsOnline(void)
+{
+  constexpr uint32_t kRcTimeoutMs = 100U;
+
+  static uint32_t last_cnt = 0;
+  static uint32_t last_tick = 0;
+
+  uint32_t cnt = rc_rx_cnt; /* volatile 读一次，后面都用这个快照 */
+
+  if (cnt != last_cnt)
+  {
+    last_cnt = cnt;
+    last_tick = hello_world::tick::GetTickMs();
+    return true;
+  }
+
+  /* 无符号减法：计到 2^32 回绕依然给出正确的时间差 */
+  return (hello_world::tick::GetTickMs() - last_tick) < kRcTimeoutMs;
 }

@@ -24,6 +24,10 @@
 #include "ins_motor.hpp"    /* GetMotorWheel / GetMotorSteer */
 #include "motor_GM6020.hpp" /* GM6020::GetRxId */
 #include "motor_M3508.hpp"  /* M3508::GetRxId */
+#include "tick.hpp"
+
+extern uint32_t g_wheel_last_tick[4];
+extern uint32_t g_steer_last_tick[4];
 
 /* Private variables ---------------------------------------------------------*/
 static CAN_RxHeaderTypeDef rx_header1;
@@ -172,6 +176,7 @@ static void RouteCan1Frame(const CAN_RxHeaderTypeDef *header,
     hello_world::motor::Motor *motor = GetMotorSteer(idx);
     if (hello_world::motor::GM6020::GetRxId(motor->id()) == header->StdId) // 命中
     {
+      g_steer_last_tick[idx] = hello_world::tick::GetTickMs();
       (void)motor->decode(data);
       return;
     }
@@ -205,6 +210,7 @@ static void RouteCan2Frame(const CAN_RxHeaderTypeDef *header, //
     hello_world::motor::Motor *motor = GetMotorWheel(idx);
     if (hello_world::motor::M3508::GetRxId(motor->id()) == header->StdId)
     {
+      g_wheel_last_tick[idx] = hello_world::tick::GetTickMs();
       (void)motor->decode(data);
       return;
     }

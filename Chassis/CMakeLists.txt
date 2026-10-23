@@ -80,6 +80,14 @@ foreach(STM32_COMPILE_DEFINE ${STM32_COMPILE_DEFINES})
   endif()
 endforeach()
 
+# ########################## TICK 配置 #######################################
+# tick.cpp 的全部实现被 #if defined(USE_UNIX_TICK) / #elif defined(USE_HAL_TICK)
+# 包住。两个宏都不定义时，整个文件编译成空，任何 tick::GetTickMs() 调用都会在
+# 链接期报 "undefined reference"。
+#   USE_HAL_TICK  ：MCU 上用 HAL_GetTick()（本项目选它）
+#   USE_UNIX_TICK ：PC 上用 std::chrono（桌面单元测试用）
+add_definitions(-DUSE_HAL_TICK)
+
 # #################### ADD LIBRARIES AND EXECUTABLE SECTION ####################
 # Initialize source and include lists
 set(project_srcs)
