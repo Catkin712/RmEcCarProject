@@ -29,10 +29,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 
-/* TODO【新人任务】:
- * 在此 include 任务层头文件，例如 #include "main_task.hpp"，
- * 它声明了 extern "C" 的 MainTaskInit(void) / MainTask(void)。
- */
+#include <main_task.hpp>
 
 /* USER CODE END Includes */
 
@@ -85,7 +82,7 @@ int main(void)
   HAL_Init();
 
   /* USER CODE BEGIN Init */
-
+  __HAL_DBGMCU_FREEZE_IWDG(); /* 调试器 halt 时冻结看门狗 */
   /* USER CODE END Init */
 
   /* Configure the system clock */
@@ -111,6 +108,7 @@ int main(void)
   MX_TIM2_Init();
   MX_USART3_UART_Init();
   /* USER CODE BEGIN 2 */
+  MainTaskInit();
 
   HAL_TIM_Base_Start_IT(&htim2);
   HAL_TIM_Base_Start_IT(&htim6);
@@ -123,6 +121,7 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+    HAL_IWDG_Refresh(&hiwdg); /* 临时喂狗；任务 10 改成“通信有效才刷新” */
   }
   /* USER CODE END 3 */
 }

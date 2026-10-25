@@ -18,13 +18,9 @@
 /* Private constants ---------------------------------------------------------*/
 /* Private types -------------------------------------------------------------*/
 /* Private variables ---------------------------------------------------------*/
+static hello_world::imu::Imu g_imu;
 /* External variables --------------------------------------------------------*/
 /* Private function prototypes -----------------------------------------------*/
 /* Exported function definitions ---------------------------------------------*/
-hello_world::imu::Imu *GetImu()
-{
-  static hello_world::imu::Imu imu;
-  return &imu;
-}
-
+hello_world::imu::Imu *GetImu() { return &g_imu; }
 /* Private function definitions ----------------------------------------------*/

@@ -26,6 +26,9 @@ void MainTaskInit(void) {
    *   3. 调用 CommTaskInit() 完成通讯初始化（UART 接收、IWDG 等）。
    * 注意：不要在这里写任何周期性逻辑。
    */
+
+  /* UART 接收已从底板迁移；CAN 滤波器等其余通讯初始化仍待任务 1。 */
+  CommTaskInit();
 }
 
 void MainTask(void) {
