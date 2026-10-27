@@ -21,6 +21,7 @@
 #include "tick.hpp"
 #include "ins_imu.hpp"
 #include "spi.h" /* hspi1 */
+#include "ins_pid.hpp"
 
 /* Private variables ---------------------------------------------------------*/
 uint32_t g_wheel_last_tick[4] = {0};
@@ -62,6 +63,15 @@ void MainTaskInit(void)
   {
     (void)GetMotorSteer(i);
   }
+  for (int i = 0; i < kWheelNum; ++i)
+  {
+    (void)GetMotorWheel(i);
+  }
+  for (int i = 0; i < kWheelNum; ++i)
+  {
+    (void)GetMotorSteer(i);
+  }
+
   CommTaskInit(); // 通讯层：滤波 → Start → 使能中断
 
   /*IMU 初始化*/
