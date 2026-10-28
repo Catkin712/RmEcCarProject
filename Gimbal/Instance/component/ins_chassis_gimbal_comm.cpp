@@ -22,21 +22,13 @@
 /* External variables --------------------------------------------------------*/
 /* Private function prototypes -----------------------------------------------*/
 /* Exported function definitions ---------------------------------------------*/
-robot::GimbalChassisComm *GetGimbalChassisComm() {
-  /* TODO【新人任务】:
-   * 返回本板双板通讯对象单例。
-   *
-   * 你要做：
-   *   1. 静态定义一个 robot::GimbalChassisComm 对象，构造时传入：
-   *      - CodePart：本板是 Chassis 还是 Gimbal（决定编解码方向）。
-   *      - tx_id / rx_id：本板发送帧 / 接收帧的 CAN 标准帧 ID（两板协商一致）。
-   *   2. 返回其地址。
-   *
-   * 约束 / 提示：
-   *   - 类定义在 RobotComponents/component/gimbal_chassis_comm.hpp（encode/decode 由你实现）。
-   *   - CAN ID 建议从 0x200 之后的空闲标准帧 ID 里选，避开电机反馈 ID。
-   */
-  return nullptr;
+robot::GimbalChassisComm *GetGimbalChassisComm()
+{
+  /* 本板身份 / 本板发送 ID / 本板接收 ID
+   *   底盘板：CodePart::Chassis, 0x101, 0x102
+   *   云台板：CodePart::Gimbal,  0x102, 0x101 */
+  static robot::GimbalChassisComm comm(robot::GimbalChassisComm::CodePart::Gimbal, 0x102, 0x101);
+  return &comm;
 }
 
 /* Private function definitions ----------------------------------------------*/

@@ -76,6 +76,7 @@ hello_world::pid::Pid *GetPidMotorSteer(int idx)
   static bool initialized = false;
   if (!initialized)
   {
+    initialized = true;
     for (int i = 0; i < kSteerNum; i++)
     {
       steersPid[i].init(kSteerCfg[i]);

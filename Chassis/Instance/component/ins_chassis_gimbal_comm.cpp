@@ -36,7 +36,11 @@ robot::GimbalChassisComm *GetGimbalChassisComm() {
    *   - 类定义在 RobotComponents/component/gimbal_chassis_comm.hpp（encode/decode 由你实现）。
    *   - CAN ID 建议从 0x200 之后的空闲标准帧 ID 里选，避开电机反馈 ID。
    */
-  return nullptr;
+  /* 本板身份 / 本板发送 ID / 本板接收 ID
+   *   底盘板：CodePart::Chassis, 0x101, 0x102
+   *   云台板：CodePart::Gimbal,  0x102, 0x101 */
+  static robot::GimbalChassisComm comm(robot::GimbalChassisComm::CodePart::Chassis, 0x101, 0x102);
+  return &comm;
 }
 
 /* Private function definitions ----------------------------------------------*/

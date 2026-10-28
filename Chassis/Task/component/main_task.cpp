@@ -67,7 +67,7 @@ void MainTaskInit(void)
   {
     (void)GetPidMotorWheel(i);
   }
-  for (int i = 0; i < kWheelNum; ++i)
+  for (int i = 0; i < kSteerNum; ++i)
   {
     (void)GetPidMotorSteer(i);
   }
