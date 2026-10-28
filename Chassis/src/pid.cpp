@@ -2,7 +2,7 @@
  * @Author: Catkin712 1465852795@qq.com
  * @Date: 2026-10-26 19:32:45
  * @LastEditors: Catkin712 1465852795@qq.com
- * @LastEditTime: 2026-10-26 20:05:54
+ * @LastEditTime: 2026-10-28 19:14:09
  * @FilePath: \RmEcCarProject\Chassis\src\pid.cpp
  * @Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
  */
@@ -66,6 +66,7 @@ namespace hello_world
                 out = -cfg_.out_lim;
                 saturated_ = true;
             }
+            else saturated_ = false;
 
             err_last_ = err_;
             output_ = out;

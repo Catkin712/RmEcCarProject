@@ -65,11 +65,11 @@ void MainTaskInit(void)
   }
   for (int i = 0; i < kWheelNum; ++i)
   {
-    (void)GetMotorWheel(i);
+    (void)GetPidMotorWheel(i);
   }
   for (int i = 0; i < kWheelNum; ++i)
   {
-    (void)GetMotorSteer(i);
+    (void)GetPidMotorSteer(i);
   }
 
   CommTaskInit(); // 通讯层：滤波 → Start → 使能中断

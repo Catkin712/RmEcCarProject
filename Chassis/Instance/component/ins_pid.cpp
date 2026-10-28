@@ -58,6 +58,7 @@ hello_world::pid::Pid *GetPidMotorWheel(int idx)
   static bool initialized = false;
   if (!initialized)
   {
+    initialized = true;
     for (int i = 0; i < kWheelNum; i++)
     {
       wheelsPid[i].init(kWheelCfg[i]);
