@@ -40,13 +40,14 @@ void CanFilter_Init(CAN_HandleTypeDef *hcan);
 /**
  * @brief       向 CAN 总线发送一帧标准帧
  * @param       hcan: CAN 句柄
- * @param       msg: 待发送的 8 字节数据首地址
+ * @param       msg: 待发送的 8 字节数据首地址（只读）
  * @param       id: 标准帧 ID（11 位）
  * @param       len: 数据长度（字节数，一般 8）
- * @retval      None
+ * @retval      HAL 状态：HAL_OK 成功；HAL_ERROR 见 hcan->ErrorCode
+ *              （注意：3 个邮箱全满时 HAL 会误报 HAL_CAN_ERROR_PARAM）
  */
-void CAN_Send_Msg(CAN_HandleTypeDef *hcan, uint8_t *msg, uint32_t id,
-                  uint8_t len);
+HAL_StatusTypeDef CAN_Send_Msg(CAN_HandleTypeDef *hcan, const uint8_t *msg,
+                               uint32_t id, uint8_t len);
 
 #ifdef __cplusplus
 }

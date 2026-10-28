@@ -15,6 +15,7 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main_task.hpp"
 #include "comm_task.hpp"
+#include "tim.h" /* htim6 */
 
 /* Exported function definitions ---------------------------------------------*/
 void MainTaskInit(void) {
@@ -40,11 +41,17 @@ void MainTask(void) {
 }
 
 /* Private function definitions ----------------------------------------------*/
-/* TODO【新人任务】:
- * 实现 htim6 周期中断回调 HAL_TIM_PeriodElapsedCallback：
- *   - 先判中断来自 htim6（避免把别的定时器中断误当成 1ms tick）；
- *   - 再调用 MainTask() 与 CommTask()。
- * 注意：
- *   - main.c 已 HAL_TIM_Base_Start_IT(&htim6)，这里只需补中断里的分发；
- *   - HAL 回调是 C 链接，需用 extern "C" 包裹，否则中断里找不到符号。
+/**
+ * @brief  1 ms 周期中断入口（TIM6）
+ * @note   main.c 里同时开了 htim2 和 htim6 的更新中断：TIM2 是 32 位自由计数器
+ *         （周期约 51 s），所以必须判 htim6，否则会被误当成 1 ms tick。
+ *         HAL 回调是 C 链接，必须用 extern "C"。
  */
+extern "C" void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
+{
+  if (htim == &htim6)
+  {
+    MainTask();  /* 控制链路（现在是空壳） */
+    CommTask();  /* 通讯链路：把 RC 打包成 0x102 发出去 */
+  }
+}

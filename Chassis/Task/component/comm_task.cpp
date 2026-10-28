@@ -24,6 +24,10 @@
 #include "ins_comm.hpp" /* GetRemoteControl */
 #include "usart.h"      /* huart3 */
 #include "tick.hpp"     /* hello_world::tick::GetTickMs() */
+#include "iwdg.h"       /* hiwdg */
+
+#include "gimbal_chassis_comm.hpp"     /* 完整类型：encode()/tx_id()/chassis_data() */
+#include "ins_chassis_gimbal_comm.hpp" /* GetGimbalChassisComm */
 
 /* Private constants ---------------------------------------------------------*/
 namespace
@@ -34,13 +38,21 @@ namespace
 
 /* Private variables ---------------------------------------------------------*/
 static uint8_t dbus_rx_buf[hello_world::remote_control::kRcRxDataLen];
+/* 三个状态量：文件作用域 + static（不用匿名 namespace），
+ * 这样 Ozone 里直接写 g_comm_armed 就能找到。 */
+static volatile bool g_comm_armed = false; /* 是否已收到过有效帧 */
+static uint32_t g_boot_tick = 0;           /* CommTaskInit 里记录的开机时刻 */
+static constexpr uint32_t kStartupGraceMs = 2000U; /* 开机宽限期 */
 /* Ozone 观察用 */
 static volatile uint32_t rc_rx_cnt = 0;  /* 成功解包的帧数 */
 static volatile uint32_t rc_err_cnt = 0; /* 长度不对、被丢弃的次数 */
+static volatile uint32_t tick_now = 0;   /* CommTask 每 1 ms 刷新的时间快照 */
+static volatile uint32_t link_tx_cnt = 0; /* 已发出的 0x101 帧数 */
 
 /* Private function prototypes -----------------------------------------------*/
 static void TransmitWheelFrame(void);
 static void TransmitSteerFrame(void);
+static void TransmitLinkFrame(void);
 
 /* Exported function definitions ---------------------------------------------*/
 void CommTaskInit(void)
@@ -51,6 +63,8 @@ void CommTaskInit(void)
    *      调用 HAL_UARTEx_ReceiveToIdle_DMA 并记录接收缓冲区。
    *   3. 启动 / 刷新独立看门狗 IWDG（inc/iwdg.h）。
    */
+  g_boot_tick = hello_world::tick::GetTickMs();
+
   CanFilter_Init(&hcan1);
   CanFilter_Init(&hcan2);
 
@@ -72,8 +86,10 @@ void CommTask(void)
    *   2. 双板通讯对象 encode 后同样发送。
    *   3. 刷新 IWDG。
    */
+  tick_now = hello_world::tick::GetTickMs();
   TransmitWheelFrame();
   TransmitSteerFrame();
+  TransmitLinkFrame(); /* 双板帧：0x101，走 CAN2 */
 }
 
 /* 实现 UART 空闲中断回调 HAL_UARTEx_RxEventCallback：
@@ -137,6 +153,26 @@ static void TransmitSteerFrame(void)
 }
 
 /**
+ * @brief  双板帧：底盘 → 云台（0x101）
+ * @note   走 CAN2（和 4 个 M3508 同一条总线），1 kHz。
+ *         现在只填 ready/mode 两个真值，yaw/pitch 目标等任务 6/8 再接。
+ */
+static void TransmitLinkFrame(void)
+{
+  robot::GimbalChassisComm *comm = GetGimbalChassisComm();
+
+  comm->chassis_data().ready = true;
+  comm->chassis_data().mode = 0;        /* 任务 6 换成状态机的模式枚举 */
+  comm->chassis_data().yaw_ref = 0.0f;  /* 任务 8 再给目标角度 */
+  comm->chassis_data().pitch_ref = 0.0f;
+
+  uint8_t frame[8] = {0};
+  comm->encode(frame);
+  (void)CAN_Send_Msg(&hcan2, frame, comm->tx_id(), 8);
+  link_tx_cnt = link_tx_cnt + 1U;
+}
+
+/**
  * @brief  遥控器是否在线
  * @retval true = 最近 100 ms 内收到过新帧
  * @note   rc_rx_cnt 是 static（本文件私有），所以这个判断只能放在本文件。
@@ -160,4 +196,25 @@ bool RcIsOnline(void)
 
   /* 无符号减法：计到 2^32 回绕依然给出正确的时间差 */
   return (hello_world::tick::GetTickMs() - last_tick) < kRcTimeoutMs;
+}
+
+extern "C" void CommTaskNotifyCommOk(void)
+{
+  g_comm_armed = true;
+  (void)HAL_IWDG_Refresh(&hiwdg);
+}
+
+extern "C" void CommTaskWatchdog(void)
+{
+  /* Ozone 只能 watch 变量、不能 watch 函数返回值 */
+  tick_now = hello_world::tick::GetTickMs();
+
+  if (g_comm_armed)
+  {
+    return; /* 已 armed：此后只由解包处喂狗 */
+  }
+  if ((tick_now - g_boot_tick) < kStartupGraceMs)
+  {
+    (void)HAL_IWDG_Refresh(&hiwdg); /* 宽限期：只喂狗，不 arm */
+  }
 }

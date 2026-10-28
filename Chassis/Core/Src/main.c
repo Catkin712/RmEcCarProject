@@ -34,6 +34,7 @@
  * 它声明了 extern "C" 的 MainTaskInit(void) / MainTask(void)。
  */
 #include <main_task.hpp>
+#include <comm_task.hpp> /* CommTaskWatchdog()：通信驱动喂狗 */
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -122,7 +123,8 @@ int main(void)
   while (1)
   {
     /* USER CODE END WHILE */
-    HAL_IWDG_Refresh(&hiwdg); /* 临时喂狗；任务 10 改成“通信有效才刷新” */
+
+    CommTaskWatchdog(); /* 通信驱动喂狗：收到云台的 0x102 且 rc_online 才喂 */
     /* USER CODE BEGIN 3 */
   }
   /* USER CODE END 3 */

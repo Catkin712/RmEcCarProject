@@ -26,6 +26,10 @@
 #include "motor_M3508.hpp"  /* M3508::GetRxId */
 #include "tick.hpp"
 
+#include "comm_task.hpp"               /* CommTaskNotifyCommOk */
+#include "ins_chassis_gimbal_comm.hpp" /* GetGimbalChassisComm */
+#include "gimbal_chassis_comm.hpp"     /* 完整类型：rx_id()/decode()/gimbal_data() */
+
 extern uint32_t g_wheel_last_tick[4];
 extern uint32_t g_steer_last_tick[4];
 
@@ -42,6 +46,7 @@ static volatile uint32_t can1_unknown_cnt = 0;     /* CAN1 未命中任何路由
 static volatile uint32_t can2_unknown_cnt = 0;     /* CAN2 未命中任何路由的帧数 */
 static volatile uint32_t can1_last_unknown_id = 0; /* 最近一个未命中的 ID */
 static volatile uint32_t can2_last_unknown_id = 0;
+static volatile uint32_t link_rx_cnt = 0; /* 0x102 双板帧的有效计数（Ozone 看） */
 
 namespace
 {
@@ -61,7 +66,10 @@ static void RouteCan2Frame(const CAN_RxHeaderTypeDef *header,
 
 void CanFilter_Init(CAN_HandleTypeDef *hcan)
 {
-  CAN_FilterTypeDef can_filter;
+  /* 必须 ={0}：CAN_FilterTypeDef 里有 SlaveStartFilterBank，
+   * F4 上 HAL_CAN_ConfigFilter 会拿它写 CAN_FMR.CAN2SB（决定 bank 归 CAN1 还是 CAN2）。
+   * 不初始化就是栈上的垃圾值：CAN2 可能一个 bank 都分不到 → 只发不收。 */
+  CAN_FilterTypeDef can_filter = {0};
 
   /* 全收：掩码全 0，任何 ID 均通过 */
   can_filter.FilterMode = CAN_FILTERMODE_IDMASK;
@@ -71,6 +79,7 @@ void CanFilter_Init(CAN_HandleTypeDef *hcan)
   can_filter.FilterMaskIdHigh = 0x0000;
   can_filter.FilterMaskIdLow = 0x0000;
   can_filter.FilterActivation = ENABLE;
+  can_filter.SlaveStartFilterBank = 14; /* bank 0~13 归 CAN1，14~27 归 CAN2 */
 
   if (hcan == &hcan1)
   {
@@ -204,7 +213,22 @@ static void RouteCan2Frame(const CAN_RxHeaderTypeDef *header, //
     return;
   }
 
-  /* ③ 遍历轮电机*/
+  /* 双板通讯帧：先于电机判断，避免每个电机都比一遍 */
+  robot::GimbalChassisComm *comm = GetGimbalChassisComm();
+  if (header->StdId == comm->rx_id())
+  {
+    comm->decode(data);
+    link_rx_cnt = link_rx_cnt + 1U;
+
+    /* 收到帧 ≠ 遥控在线：云台复位后的宽限期里也会发帧（rc_online=false） */
+    if (comm->gimbal_data().rc_online)
+    {
+      CommTaskNotifyCommOk();
+    }
+    return;
+  }
+
+  /* 轮电机*/
   for (int idx = 0; idx < kWheelNum; ++idx)
   {
     hello_world::motor::Motor *motor = GetMotorWheel(idx);

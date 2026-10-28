@@ -18,11 +18,14 @@
 
 /* Includes ------------------------------------------------------------------*/
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
-/* Exported function prototypes ----------------------------------------------*/
-void CommTaskInit(void);
-void CommTask(void);
+    /* Exported function prototypes ----------------------------------------------*/
+    void CommTaskInit(void);
+    void CommTask(void);
+    void CommTaskWatchdog(void);     /* 主循环每圈调用：决定这一圈喂不喂 */
+    void CommTaskNotifyCommOk(void); /* 解包成功处调用：置 armed 并喂狗 */
 #ifdef __cplusplus
 }
 #endif

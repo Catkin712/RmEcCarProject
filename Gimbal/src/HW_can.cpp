@@ -21,19 +21,29 @@
 #include "HW_can.hpp"
 
 #include "can.h"
+#include "gimbal_chassis_comm.hpp"     /* 完整类型：rx_id()/decode() */
+#include "ins_chassis_gimbal_comm.hpp" /* GetGimbalChassisComm */
 
 /* Private variables ---------------------------------------------------------*/
 static CAN_RxHeaderTypeDef rx_header1;
 static CAN_RxHeaderTypeDef rx_header2;
 static uint8_t can1_rx_data[8];
 static uint8_t can2_rx_data[8];
-static uint32_t p_tx_mailbox;
+
+/* Ozone 观察用 */
+static volatile uint32_t can1_rx_cnt = 0;          /* CAN1 取走的帧数（不限 ID） */
+static volatile uint32_t can1_unknown_cnt = 0;     /* CAN1 未命中路由的帧数 */
+static volatile uint32_t can1_last_unknown_id = 0; /* 最近一个未命中的 ID */
+static volatile uint32_t link_rx_cnt = 0;          /* 命中双板帧 ID 的帧数（含 CRC 错） */
 
 /* Exported function definitions ---------------------------------------------*/
 
 void CanFilter_Init(CAN_HandleTypeDef *hcan)
 {
-  CAN_FilterTypeDef can_filter;
+  /* 必须 ={0}：CAN_FilterTypeDef 里有 SlaveStartFilterBank，
+   * F4 上 HAL_CAN_ConfigFilter 会拿它写 CAN_FMR.CAN2SB（决定 bank 归 CAN1 还是 CAN2）。
+   * 不初始化就是栈上的垃圾值，滤波器归属会随机错乱。 */
+  CAN_FilterTypeDef can_filter = {0};
 
   /* 全收：掩码全 0，任何 ID 均通过 */
   can_filter.FilterMode = CAN_FILTERMODE_IDMASK;
@@ -43,6 +53,7 @@ void CanFilter_Init(CAN_HandleTypeDef *hcan)
   can_filter.FilterMaskIdHigh = 0x0000;
   can_filter.FilterMaskIdLow = 0x0000;
   can_filter.FilterActivation = ENABLE;
+  can_filter.SlaveStartFilterBank = 14; /* bank 0~13 归 CAN1，14~27 归 CAN2 */
 
   if (hcan == &hcan1) {
     can_filter.FilterFIFOAssignment = CAN_FILTER_FIFO0;
@@ -59,15 +70,19 @@ void CanFilter_Init(CAN_HandleTypeDef *hcan)
   }
 }
 
-void CAN_Send_Msg(CAN_HandleTypeDef *hcan, uint8_t *msg, uint32_t id,
-                  uint8_t len)
+HAL_StatusTypeDef CAN_Send_Msg(CAN_HandleTypeDef *hcan, const uint8_t *msg,
+                               uint32_t id, uint8_t len)
 {
   CAN_TxHeaderTypeDef tx_header = {0};
   tx_header.StdId = id;
   tx_header.IDE = CAN_ID_STD;
   tx_header.RTR = CAN_RTR_DATA;
   tx_header.DLC = len;
-  HAL_CAN_AddTxMessage(hcan, &tx_header, msg, &p_tx_mailbox);
+
+  /* mailbox 是输出参数：HAL 不保留它，调用方也不需要知道用了哪个邮箱，
+   * 所以用局部变量；传 NULL 会出问题，这里必须给真实地址。 */
+  uint32_t mailbox = 0;
+  return HAL_CAN_AddTxMessage(hcan, &tx_header, msg, &mailbox);
 }
 
 /**
@@ -78,15 +93,28 @@ void CAN_Send_Msg(CAN_HandleTypeDef *hcan, uint8_t *msg, uint32_t id,
  */
 void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
 {
-  if (hcan == &hcan1) {
+  if (hcan == &hcan1)
+  {
     if (HAL_CAN_GetRxMessage(hcan, CAN_RX_FIFO0, &rx_header1,
-                             can1_rx_data) == HAL_OK) {
-      /* TODO【新人任务】: 在此按 rx_header1.StdId 路由 8 字节 can1_rx_data。
-       * 判定方法：把 StdId 与各电机的接收 ID（GetRxId）及双板通讯帧 ID 逐一比对：
-       *   - 命中某电机的接收 ID：调用该电机 decode(can1_rx_data) 解包反馈；
-       *   - 命中双板通讯帧 ID：调用自己的 GimbalChassisComm 解码；
-       *   - 都未命中：丢弃（返回前记得重新使能接收中断，见下方调用）。
-       */
+                             can1_rx_data) == HAL_OK)
+    {
+      can1_rx_cnt = can1_rx_cnt + 1U;
+
+      robot::GimbalChassisComm *comm = GetGimbalChassisComm();
+
+      /* 云台 CAN1 目前只挂底盘发来的双板帧（0x101）。
+       * 先按 4 个条件筛，避免把扩展帧/远程帧/短帧喂给 decode。 */
+      if (rx_header1.IDE == CAN_ID_STD && rx_header1.RTR == CAN_RTR_DATA &&
+          rx_header1.DLC == 8U && rx_header1.StdId == comm->rx_id())
+      {
+        comm->decode(can1_rx_data);
+        link_rx_cnt = link_rx_cnt + 1U; /* 含 CRC 错的帧；成功解包数看 g_comm.rx_cnt_ */
+      }
+      else
+      {
+        can1_unknown_cnt = can1_unknown_cnt + 1U;
+        can1_last_unknown_id = rx_header1.StdId;
+      }
     }
   }
   HAL_CAN_ActivateNotification(hcan, CAN_IT_RX_FIFO0_MSG_PENDING);
