@@ -47,14 +47,16 @@ namespace
 } // namespace
 /* Private types -------------------------------------------------------------*/
 /* Private variables ---------------------------------------------------------*/
+static hello_world::motor::M3508 wheels[kWheelNum];
+static hello_world::motor::GM6020 steers[kSteerNum];
 /* External variables --------------------------------------------------------*/
 /* Private function prototypes -----------------------------------------------*/
 /* Exported function definitions ---------------------------------------------*/
-hello_world::motor::Motor *GetMotorWheel(int idx)
+hello_world::motor::Motor *
+GetMotorWheel(int idx)
 {
   HW_ASSERT(idx >= 0 && idx < kWheelNum, "Error: idx out of range");
 
-  static hello_world::motor::M3508 wheels[kWheelNum];
   static bool initialized = false;
   if (!initialized)
   {
@@ -70,7 +72,6 @@ hello_world::motor::Motor *GetMotorWheel(int idx)
 hello_world::motor::Motor *GetMotorSteer(int idx)
 {
   HW_ASSERT(idx >= 0 && idx < kSteerNum, "Error: idx out of range");
-  static hello_world::motor::GM6020 steers[kSteerNum];
   static bool initialized = false;
   if (!initialized)
   {
