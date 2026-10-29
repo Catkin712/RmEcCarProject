@@ -22,6 +22,8 @@
 #include "ins_imu.hpp"
 #include "spi.h" /* hspi1 */
 #include "ins_pid.hpp"
+#include "ins_robot.hpp"
+#include "robot.hpp"
 
 /* Private variables ---------------------------------------------------------*/
 uint32_t g_wheel_last_tick[4] = {0};
@@ -96,6 +98,8 @@ void MainTaskInit(void)
                                    0.0f, 0.0f, 1.0f};
 
     (void)GetImu()->init(cfg, kRotIdentity, 1000.0f); /* 1 kHz */
+
+    (void)GetRobot()->init(); /* 电机、通信都初始化完再初始化底盘 */
   }
 }
 
@@ -107,6 +111,7 @@ void MainTask(void)
    * 保持薄薄一层，不要在这里堆业务逻辑。
    */
   GetImu()->update();
+  GetRobot()->update();
 }
 
 /* Private function definitions ----------------------------------------------*/

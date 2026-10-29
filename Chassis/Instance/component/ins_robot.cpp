@@ -1,47 +1,33 @@
+/*
+ * @Author: Catkin712 1465852795@qq.com
+ * @Date: 2026-10-19 19:38:57
+ * @LastEditors: Catkin712 1465852795@qq.com
+ * @LastEditTime: 2026-10-29 21:16:02
+ * @FilePath: \Project_Steer\RmEcCarProject\Chassis\Instance\component\ins_robot.cpp
+ * @Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
+ */
 /**
  *******************************************************************************
- * @file      :ins_robot.cpp
- * @brief     :
- * @history   :
- *  Version     Date            Author          Note
- *  V0.9.0      yyyy-mm-dd      <author>        1. <note>
- *******************************************************************************
- * @attention :
- *******************************************************************************
- *  Copyright (c) 2024 Hello World Team, Zhejiang University.
- *  All Rights Reserved.
+ * @file      : ins_robot.cpp
+ * @brief     : 底盘 Robot / Chassis 单例
  *******************************************************************************
  */
-/* Includes ------------------------------------------------------------------*/
 #include "ins_robot.hpp"
-/* Private macro -------------------------------------------------------------*/
-/* Private constants ---------------------------------------------------------*/
-/* Private types -------------------------------------------------------------*/
+
+#include "chassis.hpp"
+#include "robot.hpp"
+
 /* Private variables ---------------------------------------------------------*/
-/* External variables --------------------------------------------------------*/
-/* Private function prototypes -----------------------------------------------*/
+static robot::Chassis g_chassis;
+static robot::Robot g_robot(&g_chassis);
+
 /* Exported function definitions ---------------------------------------------*/
-robot::Robot *GetRobot() {
-  /* TODO【新人任务】:
-   * 返回本板顶层状态机 robot::Robot 单例。
-   *
-   * 你要做：
-   *   1. 在本文件静态定义一个 robot::Robot 对象（静态存储期，程序启动即构造）。
-   *   2. 返回它的地址。
-   *
-   * 约束 / 提示：
-   *   - robot::Robot 类的定义由你在 RobotModules/component/robot.hpp 补全（见该文件 TODO），
-   *     本文件只负责实例化并返回地址。
-   */
-  return nullptr;
+robot::Robot *GetRobot()
+{
+  return &g_robot;
 }
 
-robot::Chassis *GetChassis() {
-  /* TODO【新人任务】:
-   * 返回 Chassis 模块 robot::Chassis 单例，做法同 GetRobot()。
-   * robot::Chassis 类定义由你在 RobotModules/component/chassis.hpp 补全。
-   */
-  return nullptr;
+robot::Chassis *GetChassis()
+{
+  return &g_chassis;
 }
-
-/* Private function definitions ----------------------------------------------*/

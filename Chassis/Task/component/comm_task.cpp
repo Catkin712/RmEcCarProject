@@ -38,15 +38,20 @@ namespace
 
 /* Private variables ---------------------------------------------------------*/
 static uint8_t dbus_rx_buf[hello_world::remote_control::kRcRxDataLen];
-/* 三个状态量：文件作用域 + static（不用匿名 namespace），
- * 这样 Ozone 里直接写 g_comm_armed 就能找到。 */
-static volatile bool g_comm_armed = false; /* 是否已收到过有效帧 */
-static uint32_t g_boot_tick = 0;           /* CommTaskInit 里记录的开机时刻 */
+/* 舵机发送侧的调试镜像：文件作用域（不用匿名 namespace），Ozone 里直接写名字就能找到。
+ * g_steer_tx_cnt 涨而 g_steer_tx_ok 不涨 → CAN 发送失败；
+ * 两者都不涨 → TransmitSteerFrame() 根本没被执行。 */
+uint32_t g_steer_tx_cnt = 0;                       /* 调用次数 */
+uint32_t g_steer_tx_ok = 0;                        /* HAL_OK 次数 */
+uint32_t g_steer_tx_id = 0;                        /* 实际使用的发送 ID：0x1FE=电流帧，0x1FF=电压帧 */
+uint8_t g_steer_tx_data[8] = {0};                  /* 最近一帧的 8 字节 */
+static volatile bool g_comm_armed = false;         /* 是否已收到过有效帧 */
+static uint32_t g_boot_tick = 0;                   /* CommTaskInit 里记录的开机时刻 */
 static constexpr uint32_t kStartupGraceMs = 2000U; /* 开机宽限期 */
 /* Ozone 观察用 */
-static volatile uint32_t rc_rx_cnt = 0;  /* 成功解包的帧数 */
-static volatile uint32_t rc_err_cnt = 0; /* 长度不对、被丢弃的次数 */
-static volatile uint32_t tick_now = 0;   /* CommTask 每 1 ms 刷新的时间快照 */
+static volatile uint32_t rc_rx_cnt = 0;   /* 成功解包的帧数 */
+static volatile uint32_t rc_err_cnt = 0;  /* 长度不对、被丢弃的次数 */
+static volatile uint32_t tick_now = 0;    /* CommTask 每 1 ms 刷新的时间快照 */
 static volatile uint32_t link_tx_cnt = 0; /* 已发出的 0x101 帧数 */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -146,10 +151,22 @@ static void TransmitSteerFrame(void)
   {
     (void)GetMotorSteer(i)->encode(tx_data); /* 同 F */
   }
+  /* 先把这一帧抄一份给 Ozone，再发（否则看到的是下一帧的内容） */
+  for (uint8_t i = 0U; i < 8U; i++)
+  {
+    g_steer_tx_data[i] = tx_data[i];
+  }
+  g_steer_tx_cnt = g_steer_tx_cnt + 1U;
 
   hello_world::motor::InputType in_type = GetMotorSteer(0)->get_input_type();
-  (void)CAN_Send_Msg(&hcan1, tx_data,
-                     hello_world::motor::GM6020::GetTxId(GetMotorSteer(0)->id(), in_type), 8);
+  uint32_t tx_id =
+      hello_world::motor::GM6020::GetTxId(GetMotorSteer(0)->id(), in_type);
+  g_steer_tx_id = tx_id;
+
+  if (CAN_Send_Msg(&hcan1, tx_data, tx_id, 8) == HAL_OK)
+  {
+    g_steer_tx_ok = g_steer_tx_ok + 1U;
+  }
 }
 
 /**
@@ -162,8 +179,8 @@ static void TransmitLinkFrame(void)
   robot::GimbalChassisComm *comm = GetGimbalChassisComm();
 
   comm->chassis_data().ready = true;
-  comm->chassis_data().mode = 0;        /* 任务 6 换成状态机的模式枚举 */
-  comm->chassis_data().yaw_ref = 0.0f;  /* 任务 8 再给目标角度 */
+  comm->chassis_data().mode = 0;       /* 任务 6 换成状态机的模式枚举 */
+  comm->chassis_data().yaw_ref = 0.0f; /* 任务 8 再给目标角度 */
   comm->chassis_data().pitch_ref = 0.0f;
 
   uint8_t frame[8] = {0};

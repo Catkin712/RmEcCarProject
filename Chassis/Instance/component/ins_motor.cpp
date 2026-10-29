@@ -37,12 +37,20 @@ namespace
       /* idx3 右前 */ {.angle_range = hello_world::motor::AngleRange::kNegInfToPosInf},
   };
 
-  /* 舵电机（GM6020）配置表*/
+  /* 舵电机（GM6020）配置表
+   * input_type = kCurr：用电流帧 0x1FE 控制（±16384 ↔ ±3 A）。
+   * 若电机在 RoboMaster Assist 里被设成"电流环"，它只认 0x1FE，对 0x1FF 静默忽略；
+   * 这里显式走电流帧，两种情况都能动作。想回电压帧就把它改回 kRaw（默认值）。
+   * 注意字段顺序必须与 OptionalParams 声明一致：input_type 在 angle_range 之前。 */
   const hello_world::motor::OptionalParams kSteerParams[kSteerNum] = {
-      /* idx0 */ {.angle_range = hello_world::motor::AngleRange::kNegPiToPosPi},
-      /* idx1 */ {.angle_range = hello_world::motor::AngleRange::kNegPiToPosPi},
-      /* idx2 */ {.angle_range = hello_world::motor::AngleRange::kNegPiToPosPi},
-      /* idx3 */ {.angle_range = hello_world::motor::AngleRange::kNegPiToPosPi},
+      /* idx0 */ {.input_type = hello_world::motor::InputType::kCurr,
+                  .angle_range = hello_world::motor::AngleRange::kNegPiToPosPi},
+      /* idx1 */ {.input_type = hello_world::motor::InputType::kCurr,
+                  .angle_range = hello_world::motor::AngleRange::kNegPiToPosPi},
+      /* idx2 */ {.input_type = hello_world::motor::InputType::kCurr,
+                  .angle_range = hello_world::motor::AngleRange::kNegPiToPosPi},
+      /* idx3 */ {.input_type = hello_world::motor::InputType::kCurr,
+                  .angle_range = hello_world::motor::AngleRange::kNegPiToPosPi},
   };
 } // namespace
 /* Private types -------------------------------------------------------------*/

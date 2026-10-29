@@ -33,18 +33,20 @@ namespace
    *   舵角环：ref/fb 单位 rad，  输出按 GM6020 raw 给（±25000）
    * 写法：指定初始化器，字段顺序要跟 Config 声明顺序一致 */
   const hello_world::pid::Pid::Config kWheelCfg[kWheelNum] = {
-      /* idx0 左前 */ {.ts = 0.001f, .out_lim = 0.0f, .i_lim = 0.0f},
-      /* idx1 左后 */ {.ts = 0.001f, .out_lim = 0.0f, .i_lim = 0.0f},
-      /* idx2 右后 */ {.ts = 0.001f, .out_lim = 0.0f, .i_lim = 0.0f},
-      /* idx3 右前 */ {.ts = 0.001f, .out_lim = 0.0f, .i_lim = 0.0f},
+      /* idx0 左前 */ {.kp = 200.0f, .ki = 0.0f, .kd = 0.0f, .ts = 0.001f, .out_lim = 8000.0f, .i_lim = 0.0f},
+      /* idx1 左后 */ {.kp = 200.0f, .ki = 0.0f, .kd = 0.0f, .ts = 0.001f, .out_lim = 8000.0f, .i_lim = 0.0f},
+      /* idx2 右后 */ {.kp = 200.0f, .ki = 0.0f, .kd = 0.0f, .ts = 0.001f, .out_lim = 8000.0f, .i_lim = 0.0f},
+      /* idx3 右前 */ {.kp = 200.0f, .ki = 0.0f, .kd = 0.0f, .ts = 0.001f, .out_lim = 8000.0f, .i_lim = 0.0f},
   };
 
   const hello_world::pid::Pid::Config kSteerCfg[kSteerNum] = {
-      /* 四个舵 */
-      {.ts = 0.001f, .out_lim = 0.0f, .i_lim = 0.0f},
-      {.ts = 0.001f, .out_lim = 0.0f, .i_lim = 0.0f},
-      {.ts = 0.001f, .out_lim = 0.0f, .i_lim = 0.0f},
-      {.ts = 0.001f, .out_lim = 0.0f, .i_lim = 0.0f},
+      /* 四个舵：现在走电流帧 0x1FE，输出单位是安培，不是 raw。
+       * kp 单位 A/rad：误差 1.5 rad → 2.25 A；
+       * out_lim 必须 ≤ curr_input_lim(3.0)，否则 setInput 会返回 kInputValueOverflow。 */
+      {.kp = 1.5f, .ki = 0.0f, .kd = 0.02f, .ts = 0.001f, .out_lim = 3.0f, .i_lim = 0.0f},
+      {.kp = 1.5f, .ki = 0.0f, .kd = 0.02f, .ts = 0.001f, .out_lim = 3.0f, .i_lim = 0.0f},
+      {.kp = 1.5f, .ki = 0.0f, .kd = 0.02f, .ts = 0.001f, .out_lim = 3.0f, .i_lim = 0.0f},
+      {.kp = 1.5f, .ki = 0.0f, .kd = 0.02f, .ts = 0.001f, .out_lim = 3.0f, .i_lim = 0.0f},
   };
 } // namespace
 /* External variables --------------------------------------------------------*/
