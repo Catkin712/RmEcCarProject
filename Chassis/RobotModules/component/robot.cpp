@@ -102,9 +102,15 @@ namespace robot
         };
 
         Chassis::Velocity v;
+        /* 摇杆 → 底盘速度（2026-10-29 实测标定）：
+         * - 左摇杆上下：上为正，与 vx（向前为正）同号，直接用；
+         * - 左右平移：推左车往右走 → vy 取负；
+         * - 自旋：推右摇杆向右车逆时针转 → w 取负（底盘约定逆时针为正）。
+         * 两个负号是"摇杆极性"和"底盘 y 轴向左、ω 逆时针为正"两套约定之差，
+         * 改这里只影响输入语义，不动逆解和电机环。 */
         v.vx = deadband(rc_lv_) * kMaxVx;
-        v.vy = deadband(rc_lh_) * kMaxVy;
-        v.w = deadband(rc_rh_) * kMaxW;
+        v.vy = -deadband(rc_lh_) * kMaxVy;
+        v.w = -deadband(rc_rh_) * kMaxW;
         return v;
     }
 
