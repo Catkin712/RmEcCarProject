@@ -15,11 +15,15 @@
 /* Includes ------------------------------------------------------------------*/
 #include "comm_task.hpp"
 
+#include <cmath> /* fabsf */
+
 #include "DT7.hpp"      /* DT7::rc_xxx()，协议层不直接依赖它 */
 #include "HW_can.hpp"   /* CanFilter_Init / CAN_Send_Msg */
 #include "can.h"        /* hcan1 / hcan2 */
 #include "ins_comm.hpp" /* GetRemoteControl */
 #include "ins_motor.hpp"     /* GetMotorYaw / GetMotorPitch */
+#include "imu.hpp"           /* 完整类型：yaw() / is_ok() */
+#include "ins_imu.hpp"       /* GetImu */
 #include "motor_DaMiao.hpp"  /* 完整类型：setMitInput / encode / tx_id */
 #include "usart.h"      /* huart3 */
 #include "iwdg.h"
@@ -41,7 +45,16 @@ constexpr float kYawRate = 6.0f;      /* 摇杆满程时 yaw 角速度，rad/s *
 constexpr float kRcDeadBand = 0.05f;  /* 摇杆死区 */
 constexpr float kPitchKp = 40.0f;     /* MIT 内置 PD：kp ∈ [0, 500] */
 constexpr float kPitchKd = 1.0f;      /* kd ∈ [0, 5] */
-constexpr float kYawKd = 1.0f;
+constexpr float kYawFollowKp = 6.0f;     /* 随动：误差(rad) → 角速度(rad/s) */
+constexpr float kYawFollowVelMax = 8.0f; /* 随动最大跟踪角速度，rad/s */
+constexpr float kYawErrDeadBand = 0.005f;/* 误差死区，防止到位后嗡嗡抖 */
+constexpr float kYawVelKd = 2.0f;        /* 速度环阻尼（随动/分离共用） */
+/* 分离模式：锁 IMU 绝对朝向的比例环 */
+constexpr float kYawFreeKp = 6.0f;           /* 误差(rad) → 角速度(rad/s) */
+constexpr float kYawFreeVelMax = 8.0f;       /* 最大补偿角速度，rad/s */
+constexpr float kYawFreeErrDeadBand = 0.01f; /* 约 0.6°，防止到位后嗡嗡抖 */
+constexpr float kPi = 3.14159265358979f;
+constexpr uint32_t kGimbalJointTxId = 0x103U; /* 云台→底盘：关节状态帧 */
 constexpr float kDt = 0.001f;         /* TIM6 = 1 kHz，固定步长 */
 
 /* 摇杆死区 + 重新线性映射：死区外从 0 平滑到 1，避免"一过死区就跳" */
@@ -60,6 +73,20 @@ inline float Bound(float v, float lo, float hi)
 {
   return (v < lo) ? lo : ((v > hi) ? hi : v);
 }
+
+/* 把角度折回 (-π, π]，与电机层的 normAngle 语义一致 */
+inline float WrapPi(float a)
+{
+  while (a > kPi)
+  {
+    a -= 2.0f * kPi;
+  }
+  while (a < -kPi)
+  {
+    a += 2.0f * kPi;
+  }
+  return a;
+}
 } // namespace
 
 /* Private variables ---------------------------------------------------------*/
@@ -70,6 +97,19 @@ static uint8_t dbus_rx_buf[hello_world::remote_control::kRcRxDataLen];
 static volatile bool g_comm_armed = false; /* 是否已收到过有效帧 */
 static uint32_t g_boot_tick = 0;           /* CommTaskInit 里记录的开机时刻 */
 static constexpr uint32_t kStartupGraceMs = 2000U; /* 开机宽限期 */
+/* 看门狗判据：最近一次"有效通讯"的时刻。喂狗只看它够不够新：
+ * 通讯新鲜 = 解包中断活着；喂狗在主循环 = 主循环也活着。缺一个就复位。 */
+static volatile uint32_t g_last_comm_tick = 0;
+static constexpr uint32_t kCommTimeoutMs = 50U; /* 两帧之间最长允许间隔（DBUS 100 Hz） */
+/* 复位原因快照：RCC_CSR 的 bit29 = IWDGRSTF。复位后变量会清，所以开机立刻存下来 */
+static volatile uint32_t g_reset_cause = 0;
+/* 故障注入开关：Ozone 里置 1 就模拟"主循环卡死"，用来验证看门狗真的会复位 */
+static volatile uint32_t g_dbg_hang = 0;
+/* 复位后安全闩：必须先把左拨杆离开最上、再推到最上，才允许使能。
+ * 否则看门狗复位/重新上电时，若拨杆还停在上方，云台会立刻重新抱死。 */
+static bool g_seen_safe = false;                 /* 见过"不在最上"的合法帧 */
+static bool g_arm_latch = false;                 /* 已完成一次 上→下→上 */
+static volatile uint8_t g_arm_unlocked_dbg = 0;  /* 1 = 允许使能 */
 /* Ozone 观察用 */
 static volatile uint32_t rc_rx_cnt = 0;  /* 成功解包的帧数 */
 static volatile uint32_t rc_err_cnt = 0; /* 长度不对、被丢弃的次数 */
@@ -78,6 +118,10 @@ static volatile uint32_t link_tx_cnt = 0; /* 已发出的 0x102 帧数 */
 
 /* 云台关节自检用的观察量（Ozone 输入名字即可） */
 static volatile uint32_t g_yaw_tx_cnt = 0;    /* yaw MIT 帧成功入邮箱次数 */
+/* 0x103 关节状态帧的发送计数与镜像 */
+static uint32_t g_joint_div = 0;
+static volatile uint32_t g_joint_tx_cnt = 0;
+static volatile float g_joint_yaw_dbg = 0.0f;
 static volatile uint32_t g_pitch_tx_cnt = 0;  /* pitch MIT 帧成功入邮箱次数 */
 static volatile float g_yaw_angle_dbg = 0.0f;   /* yaw 反馈角（rad） */
 static volatile float g_pitch_angle_dbg = 0.0f; /* pitch 反馈角（rad） */
@@ -92,6 +136,31 @@ static volatile float g_pitch_des_dbg = 0.0f;   /* pitch 目标角（rad） */
 static volatile float g_yaw_vel_des_dbg = 0.0f; /* yaw 目标角速度（rad/s） */
 static volatile uint8_t g_gimbal_active_dbg = 0;
 
+/* 云台状态机：0=失能/急停，1=随动，2=分离 */
+enum class GimbalMode : uint8_t {
+  kDisabled = 0U,
+  kFollow = 1U,
+  kFree = 2U,
+};
+static GimbalMode g_mode = GimbalMode::kDisabled;
+static volatile uint8_t g_mode_dbg = 0U;     /* Ozone 观察：当前模式 */
+static volatile float g_yaw_des_dbg = 0.0f;  /* 随动模式的相对角目标（rad） */
+static volatile float g_yaw_err_dbg = 0.0f;  /* 随动的角度误差（rad） */
+/* 分离模式：锁定的绝对朝向（IMU yaw，rad）与观察量 */
+static float g_yaw_free_lock = 0.0f;              /* 进入分离时锁定的绝对朝向 */
+/* 随动（底盘跟随）的两段式状态 */
+static float g_yaw_follow_lock = 0.0f;            /* 对齐阶段锁定的绝对朝向 */
+static bool g_follow_aligning = false;            /* true = 正在等底盘转过来 */
+static volatile uint8_t g_follow_aligning_dbg = 0;/* Ozone：1 = 对齐阶段 */
+static constexpr float kAlignEnterRad = 0.12f;    /* 超过这个误差 → 进入对齐阶段 */
+static constexpr float kAlignExitRad = 0.03f;     /* 低于这个误差 → 认为已对齐 */
+static volatile float g_yaw_free_yaw_dbg = 0.0f;  /* IMU 当前绝对朝向 */
+static volatile float g_yaw_free_err_dbg = 0.0f;  /* 锁定值 − 当前值（rad） */
+/* 排查用：Ozone 里把 g_dbg_force_follow 改成 1，可无视拨杆强制进随动 */
+static volatile uint8_t g_dbg_force_follow = 0U;
+static volatile uint8_t g_rc_l_switch_dbg = 0U; /* 左拨杆原始值 1=上 3=中 2=下 */
+static volatile uint8_t g_rc_r_switch_dbg = 0U; /* 右拨杆原始值 */
+
 /* Private function prototypes -----------------------------------------------*/
 bool RcIsOnline(void); /* 定义在本文件末尾，CommTask 要先用 */
 
@@ -99,6 +168,9 @@ bool RcIsOnline(void); /* 定义在本文件末尾，CommTask 要先用 */
 void CommTaskInit(void)
 {
   g_boot_tick = hello_world::tick::GetTickMs();
+  /* 读复位原因再清零：Ozone 里 g_reset_cause 的 bit29(IWDGRSTF)=1 就是看门狗复位 */
+  g_reset_cause = RCC->CSR;
+  __HAL_RCC_CLEAR_RESET_FLAGS();
 
   /* 云台 CAN1：底盘 0x101 + yaw 达妙反馈，FIFO0/bank0 全收；
    * 云台 CAN2：pitch 达妙反馈，FIFO1/bank14 全收。 */
@@ -140,9 +212,12 @@ void CommTask(void)
 }
 
 /**
- * @brief   云台关节环（1 kHz）
- * @note    yaw 用 MIT 内置 PD 的速度模式（kp=0，只跟角速度），
- *          pitch 用位置模式（kp 把目标角拉住），两端都有软件限位。
+ * @brief   云台关节环 + 模式状态机（1 kHz）
+ * @note    模式由左/右拨杆决定：
+ *            左拨杆最上            → 允许使能，否则失能（零力矩可手转）
+ *            右拨杆 上 / 中 / 下   → 随动 / 分离 / 急停
+ *          yaw：随动=相对角位置环，分离=阻尼速度环；
+ *          pitch：与 yaw 模式无关，使能时是带软件限位的位置环。
  */
 void GimbalTask(void)
 {
@@ -160,42 +235,172 @@ void GimbalTask(void)
   g_yaw_enabled_dbg = yaw->is_enabled() ? 1U : 0U;
   g_pitch_enabled_dbg = pitch->is_enabled() ? 1U : 0U;
 
-  /* ② 使能条件与底盘保持一致：遥控在线 + 左拨杆最上 + 右拨杆不在最下（急停） */
-  const bool active =
-      RcIsOnline() &&
-      (rc->rc_l_switch() == hello_world::remote_control::kSwitchStateUp) &&
-      (rc->rc_r_switch() != hello_world::remote_control::kSwitchStateDown);
-  g_gimbal_active_dbg = active ? 1U : 0U;
+  /* ② 定模式：遥控在线 + 左拨杆最上 + 通过安全闩 才允许工作 */
+  const bool rc_link = RcIsOnline();
+  const bool l_up = (rc->rc_l_switch() == hello_world::remote_control::kSwitchStateUp);
+
+  /* 安全闩只认"遥控在线时看到的拨杆状态"：上电瞬间 DBUS 还没数据，
+   * 此时读到的是默认 0，不能算数。 */
+  if (rc_link)
+  {
+    if (!l_up)
+    {
+      g_seen_safe = true; /* 看到过非"最上"的状态，说明操作者手在杆上 */
+      g_arm_latch = false;
+    }
+    else if (g_seen_safe)
+    {
+      g_arm_latch = true; /* 先离杆再推到最上 = 一次明确的使能动作 */
+    }
+  }
+  g_arm_unlocked_dbg = (g_arm_latch && l_up) ? 1U : 0U;
+
+  const bool rc_ok = rc_link && g_arm_latch && l_up;
+
+  GimbalMode mode = GimbalMode::kDisabled;
+  if (rc_ok)
+  {
+    switch (rc->rc_r_switch())
+    {
+      case hello_world::remote_control::kSwitchStateUp:
+        mode = GimbalMode::kFollow; /* 随动：云台相对底盘锁角 */
+        break;
+      case hello_world::remote_control::kSwitchStateMid:
+        mode = GimbalMode::kFree; /* 分离：云台不锁角，只阻尼 */
+        break;
+      default: /* 右拨杆最下 = 急停 */
+        mode = GimbalMode::kDisabled;
+        break;
+    }
+  }
+
+  /* 排查开关：Ozone 里把 g_dbg_force_follow 置 1，可强制进随动 */
+  if (g_dbg_force_follow != 0U)
+  {
+    mode = GimbalMode::kFollow;
+  }
+  g_rc_l_switch_dbg = static_cast<uint8_t>(rc->rc_l_switch());
+  g_rc_r_switch_dbg = static_cast<uint8_t>(rc->rc_r_switch());
+
+  /* ③ 切换瞬态：进随动/失能时把目标对齐当前角，避免"一使能就甩头" */
+  if (mode != g_mode)
+  {
+    g_yaw_des_dbg = g_yaw_angle_dbg;
+    g_pitch_des_dbg = Bound(g_pitch_angle_dbg, kPitchLimitMin, kPitchLimitMax);
+    if (mode == GimbalMode::kFree)
+    {
+      /* 进入分离的瞬间：把"当前绝对朝向"记为锁定值。
+       * 不这么做的话，第一次进分离就会朝 IMU 的零位（开机时的朝向）拽。 */
+      g_yaw_free_lock = GetImu()->yaw();
+    }
+    g_mode = mode;
+  }
+  g_mode_dbg = static_cast<uint8_t>(mode);
+  g_gimbal_active_dbg = (mode != GimbalMode::kDisabled) ? 1U : 0U;
 
   float yaw_vel_des = 0.0f;
 
-  if (active)
+  switch (mode)
   {
-    /* yaw：右推 → 顺时针。实测"顺时针读数减小、逆时针为正"，所以取负号 */
-    yaw_vel_des = -ApplyDeadBand(rc->rc_rh()) * kYawRate;
+    case GimbalMode::kFollow:
+    {
+      /* 随动 = 底盘跟随云台，分两段：
+       *   段 1（对齐）：|θ_rel| 大 → 云台锁 **IMU 绝对朝向**，转子先不动，
+       *        让底盘自己去转，把 θ_rel 拉回 0；
+       *   段 2（锁定）：|θ_rel| 小 → 云台改锁 **关节角 0**，与底盘刚性相连，
+       *        之后底盘一转，云台被带着一起转。
+       * 摇杆在随动模式下不再驱动云台：右摇杆交给底盘自旋。 */
+      const float rel = WrapPi(g_yaw_angle_dbg);
 
-    /* pitch：摇杆积分成目标角（松杆保持当前角度），再夹到机械限位内 */
+      if (!g_follow_aligning && (fabsf(rel) > kAlignEnterRad))
+      {
+        /* 进入对齐段：以"此刻的绝对朝向"为锁，避免云台回弹到更早的朝向 */
+        g_follow_aligning = true;
+        g_yaw_follow_lock = GetImu()->yaw();
+      }
+      else if (g_follow_aligning && (fabsf(rel) < kAlignExitRad))
+      {
+        g_follow_aligning = false;
+      }
+      g_follow_aligning_dbg = g_follow_aligning ? 1U : 0U;
+
+      float err = 0.0f;
+      if (g_follow_aligning && GetImu()->is_ok())
+      {
+        /* 锁绝对朝向：底盘转过来，θ_rel 自然减小 */
+        err = WrapPi(g_yaw_follow_lock - GetImu()->yaw());
+      }
+      else
+      {
+        /* 已对齐（或 IMU 不可用）：锁关节角 0，跟底盘刚性相连 */
+        err = -rel;
+      }
+      g_yaw_err_dbg = err;
+      g_yaw_des_dbg = 0.0f;
+
+      if (fabsf(err) > kYawErrDeadBand)
+      {
+        yaw_vel_des = Bound(kYawFollowKp * err, -kYawFollowVelMax, kYawFollowVelMax);
+      }
+      (void)yaw->setMitInput(0.0f, yaw_vel_des, 0.0f, kYawVelKd, 0.0f);
+      break;
+    }
+    case GimbalMode::kFree:
+    {
+      /* 分离：锁 **IMU 绝对朝向**（不是相对底盘的角度）。
+       * yaw 关节编码器只有相对角，要锁绝对朝向只能靠板载 IMU。
+       * 摇杆只改"锁定值"：人想转云台就转，松手后锁住新的绝对朝向。
+       * 与随动同样不用 MIT 位置模式，只把电机当速度执行器。 */
+      if (!GetImu()->is_ok())
+      {
+        /* IMU 没就绪时退回纯阻尼，至少不会乱转 */
+        yaw_vel_des = -ApplyDeadBand(rc->rc_rh()) * kYawRate;
+        (void)yaw->setMitInput(0.0f, yaw_vel_des, 0.0f, kYawVelKd, 0.0f);
+        break;
+      }
+
+      const float yaw_abs = GetImu()->yaw();
+      g_yaw_free_lock -= ApplyDeadBand(rc->rc_rh()) * kYawRate * kDt;
+      g_yaw_free_yaw_dbg = yaw_abs;
+      const float err = WrapPi(g_yaw_free_lock - yaw_abs);
+      g_yaw_free_err_dbg = err;
+      if (fabsf(err) > kYawFreeErrDeadBand)
+      {
+        yaw_vel_des = Bound(kYawFreeKp * err, -kYawFreeVelMax, kYawFreeVelMax);
+      }
+      else
+      {
+        yaw_vel_des = 0.0f;
+      }
+      (void)yaw->setMitInput(0.0f, yaw_vel_des, 0.0f, kYawVelKd, 0.0f);
+      break;
+    }
+    default:
+    {
+      /* 失能/急停：零力矩，可手转 */
+      (void)yaw->setMitInput(0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
+      break;
+    }
+  }
+
+  /* ④ pitch：与 yaw 模式解耦；只要不是急停就按摇杆积分 + 限位
+   *    摇杆用右摇杆竖直轴 rc_rv：左摇杆竖直轴归底盘前后，别再抢；
+   *    上推 = 抬头 = 关节角往 +kPitchLimitMax 走。 */
+  if (mode != GimbalMode::kDisabled)
+  {
     g_pitch_des_dbg = Bound(
-        g_pitch_des_dbg + ApplyDeadBand(rc->rc_lv()) * kPitchRate * kDt,
+        g_pitch_des_dbg + ApplyDeadBand(rc->rc_rv()) * kPitchRate * kDt,
         kPitchLimitMin, kPitchLimitMax);
-
-    /* MIT 内置 PD：
-     *   yaw   → kp=0、kd 阻尼，纯速度环，不锁角度所以能 360° 连续转
-     *   pitch → 位置环，kp 拉目标、kd 抑制过冲 */
-    (void)yaw->setMitInput(0.0f, yaw_vel_des, 0.0f, kYawKd, 0.0f);
     (void)pitch->setMitInput(g_pitch_des_dbg, 0.0f, kPitchKp, kPitchKd, 0.0f);
   }
   else
   {
-    /* 不工作时零力矩：使能但不发力，可手转；同时把目标对齐当前角，
-     * 下次使能瞬间不会突然拉过去 */
     g_pitch_des_dbg = Bound(g_pitch_angle_dbg, kPitchLimitMin, kPitchLimitMax);
-    (void)yaw->setMitInput(0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
     (void)pitch->setMitInput(0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
   }
   g_yaw_vel_des_dbg = yaw_vel_des;
 
-  /* ③ 组帧下发 */
+  /* ⑤ 组帧下发 */
   uint8_t frame[8] = {0};
   if (yaw->encode(frame))
   {
@@ -210,6 +415,30 @@ void GimbalTask(void)
     g_pitch_tx_cnt = g_pitch_tx_cnt + 1U;
   }
   g_pitch_tx_id_dbg = pitch->tx_id();
+
+  /* ⑥ 云台→底盘关节状态帧（0x103，100 Hz）
+   * 0x102 的 8 字节已排满，关节角另开一帧；底盘拿它做“跟随云台”。
+   * 100 Hz 够用：底盘跟随是慢环，没必要 1 kHz 占总线。 */
+  ++g_joint_div;
+  if (g_joint_div >= 10U)
+  {
+    g_joint_div = 0U;
+    robot::GimbalChassisComm *comm = GetGimbalChassisComm();
+    /* 关节角是多圈的，协议里统一放 ±π 内的值，别把多圈角传给底盘 */
+    comm->joint_data().yaw_rel = WrapPi(g_yaw_angle_dbg);
+    comm->joint_data().pitch = g_pitch_angle_dbg;
+    comm->joint_data().mode = static_cast<uint8_t>(g_mode);
+    comm->joint_data().active = (g_mode != GimbalMode::kDisabled);
+    comm->joint_data().aligning = g_follow_aligning;
+
+    uint8_t joint_frame[8] = {0};
+    comm->encodeJoint(joint_frame);
+    if (CAN_Send_Msg(&hcan1, joint_frame, kGimbalJointTxId, 8) == HAL_OK)
+    {
+      g_joint_tx_cnt = g_joint_tx_cnt + 1U;
+    }
+    g_joint_yaw_dbg = g_yaw_angle_dbg;
+  }
 }
 
 /* Private function definitions ----------------------------------------------*/
@@ -279,22 +508,37 @@ bool RcIsOnline(void)
 
 extern "C" void CommTaskNotifyCommOk(void)
 {
+  /* 只记"有效通讯发生的时刻"，绝不在这里喂狗：
+   * 本函数跑在 USART 中断里，中断活着不代表主循环活着。 */
   g_comm_armed = true;
-  (void)HAL_IWDG_Refresh(&hiwdg);
+  g_last_comm_tick = hello_world::tick::GetTickMs();
 }
 
 extern "C" void CommTaskWatchdog(void)
 {
+  /* 故障注入：Ozone 把 g_dbg_hang 写 1，本函数就卡在这里不再喂狗。
+   * 主循环死了、中断还活着的情况下，看门狗必须能把板子拉回来。 */
+  if (g_dbg_hang != 0U)
+  {
+    for (;;)
+    {
+    }
+  }
+
   /* Ozone 只能 watch 变量、不能 watch 函数返回值：
    * 每圈把当前时间写进 tick_now，调试时看它涨不涨即可 */
   tick_now = hello_world::tick::GetTickMs();
 
-  if (g_comm_armed)
+  /* 两条判据同时成立才喂狗：
+   *   1) 主循环还在跑 —— 本函数就是主循环调的；
+   *   2) 通讯还新鲜   —— 最近 50 ms 内收到过有效帧。
+   * 开机 2 s 内放宽，给遥控器/底盘留出上电与首帧的时间。 */
+  const bool comm_fresh =
+      g_comm_armed && ((tick_now - g_last_comm_tick) < kCommTimeoutMs);
+  const bool in_grace = (tick_now - g_boot_tick) < kStartupGraceMs;
+
+  if (comm_fresh || in_grace)
   {
-    return; /* 已 armed：此后只由解包处喂狗 */
-  }
-  if ((tick_now - g_boot_tick) < kStartupGraceMs)
-  {
-    (void)HAL_IWDG_Refresh(&hiwdg); /* 宽限期：只喂狗，不 arm */
+    (void)HAL_IWDG_Refresh(&hiwdg);
   }
 }

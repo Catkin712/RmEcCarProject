@@ -47,6 +47,8 @@ static volatile uint32_t can2_unknown_cnt = 0;     /* CAN2 未命中任何路由
 static volatile uint32_t can1_last_unknown_id = 0; /* 最近一个未命中的 ID */
 static volatile uint32_t can2_last_unknown_id = 0;
 static volatile uint32_t link_rx_cnt = 0; /* 0x102 双板帧的有效计数（Ozone 看） */
+static volatile uint32_t link_joint_rx_cnt = 0; /* 0x103 关节帧的有效计数 */
+constexpr uint32_t kGimbalJointRxId = 0x103U;
 
 namespace
 {
@@ -224,6 +226,16 @@ static void RouteCan2Frame(const CAN_RxHeaderTypeDef *header, //
     if (comm->gimbal_data().rc_online)
     {
       CommTaskNotifyCommOk();
+    }
+    return;
+  }
+
+  /* 云台→底盘的关节状态帧（0x103）：底盘用 yaw_rel 做“跟随云台” */
+  if (header->StdId == kGimbalJointRxId)
+  {
+    if (comm->decodeJoint(data))
+    {
+      link_joint_rx_cnt = link_joint_rx_cnt + 1U;
     }
     return;
   }

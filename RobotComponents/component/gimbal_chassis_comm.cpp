@@ -123,6 +123,49 @@ void robot::GimbalChassisComm::decode(const uint8_t rx_data[8])
   last_rx_tick_ = hello_world::tick::GetTickMs();
 }
 
+void robot::GimbalChassisComm::encodeJoint(uint8_t tx_data[8])
+{
+  ++tx_joint_seq_;
+  if (code_part_ == CodePart::Gimbal)
+  {
+    /* yaw 关节角在 ±π 内，1e-3 rad/LSB 足够（int16 满量程 ±32 rad） */
+    PutI16(&tx_data[0], static_cast<int16_t>(roundf(joint_data_.yaw_rel * 1e3f)));
+    PutI16(&tx_data[2], static_cast<int16_t>(roundf(joint_data_.pitch * 1e3f)));
+    tx_data[4] = joint_data_.mode;
+    tx_data[5] = static_cast<uint8_t>((joint_data_.active ? 0x01u : 0x00u) |
+                                      (joint_data_.aligning ? 0x02u : 0x00u));
+    tx_data[6] = tx_joint_seq_;
+  }
+  else
+  {
+    for (int i = 0; i < 7; ++i)
+    {
+      tx_data[i] = 0;
+    }
+  }
+  tx_data[7] = Crc8(tx_data, 7);
+}
+
+bool robot::GimbalChassisComm::decodeJoint(const uint8_t rx_data[8])
+{
+  if (Crc8(rx_data, 7) != rx_data[7])
+  {
+    ++joint_crc_err_cnt_;
+    return false;
+  }
+  if (code_part_ != CodePart::Chassis)
+  {
+    return false;
+  }
+  joint_data_.yaw_rel = static_cast<float>(GetI16(rx_data + 0)) * 1e-3f;
+  joint_data_.pitch = static_cast<float>(GetI16(rx_data + 2)) * 1e-3f;
+  joint_data_.mode = rx_data[4];
+  joint_data_.active = (rx_data[5] & 0x01u) != 0;
+  joint_data_.aligning = (rx_data[5] & 0x02u) != 0;
+  ++joint_rx_cnt_;
+  return true;
+}
+
 bool robot::GimbalChassisComm::isOffline() const
 {
   constexpr uint32_t kOfflineTimeoutMs = 100U;

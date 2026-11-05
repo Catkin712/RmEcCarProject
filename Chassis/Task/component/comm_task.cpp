@@ -48,6 +48,12 @@ uint8_t g_steer_tx_data[8] = {0};                  /* 最近一帧的 8 字节 *
 static volatile bool g_comm_armed = false;         /* 是否已收到过有效帧 */
 static uint32_t g_boot_tick = 0;                   /* CommTaskInit 里记录的开机时刻 */
 static constexpr uint32_t kStartupGraceMs = 2000U; /* 开机宽限期 */
+/* 看门狗判据：最近一次"有效通讯"的时刻（0x102 且 rc_online）。
+ * 喂狗只看主循环 + 这个时刻够不够新，解包中断里绝不喂狗。 */
+static volatile uint32_t g_last_comm_tick = 0;
+static constexpr uint32_t kCommTimeoutMs = 50U; /* 0x102 是 100 Hz，50 ms 内必须有新帧 */
+static volatile uint32_t g_reset_cause = 0;     /* 开机时的 RCC_CSR，bit29=IWDGRSTF */
+static volatile uint32_t g_dbg_hang = 0;        /* 故障注入：置 1 模拟主循环卡死 */
 /* Ozone 观察用 */
 static volatile uint32_t rc_rx_cnt = 0;   /* 成功解包的帧数 */
 static volatile uint32_t rc_err_cnt = 0;  /* 长度不对、被丢弃的次数 */
@@ -69,6 +75,9 @@ void CommTaskInit(void)
    *   3. 启动 / 刷新独立看门狗 IWDG（inc/iwdg.h）。
    */
   g_boot_tick = hello_world::tick::GetTickMs();
+  /* 读复位原因再清零：Ozone 里 g_reset_cause 的 bit29(IWDGRSTF)=1 就是看门狗复位 */
+  g_reset_cause = RCC->CSR;
+  __HAL_RCC_CLEAR_RESET_FLAGS();
 
   CanFilter_Init(&hcan1);
   CanFilter_Init(&hcan2);
@@ -217,21 +226,33 @@ bool RcIsOnline(void)
 
 extern "C" void CommTaskNotifyCommOk(void)
 {
+  /* 只记"有效通讯发生的时刻"，绝不在这里喂狗：
+   * 本函数跑在 CAN 接收中断里，中断活着不代表主循环活着。 */
   g_comm_armed = true;
-  (void)HAL_IWDG_Refresh(&hiwdg);
+  g_last_comm_tick = hello_world::tick::GetTickMs();
 }
 
 extern "C" void CommTaskWatchdog(void)
 {
+  /* 故障注入：Ozone 把 g_dbg_hang 写 1，本函数卡死不再喂狗 */
+  if (g_dbg_hang != 0U)
+  {
+    for (;;)
+    {
+    }
+  }
+
   /* Ozone 只能 watch 变量、不能 watch 函数返回值 */
   tick_now = hello_world::tick::GetTickMs();
 
-  if (g_comm_armed)
+  /* 两条判据同时成立才喂狗：主循环活着（本函数就是主循环调的）+
+   * 云台 0x102 新鲜（含 rc_online）。开机 2 s 内放宽。 */
+  const bool comm_fresh =
+      g_comm_armed && ((tick_now - g_last_comm_tick) < kCommTimeoutMs);
+  const bool in_grace = (tick_now - g_boot_tick) < kStartupGraceMs;
+
+  if (comm_fresh || in_grace)
   {
-    return; /* 已 armed：此后只由解包处喂狗 */
-  }
-  if ((tick_now - g_boot_tick) < kStartupGraceMs)
-  {
-    (void)HAL_IWDG_Refresh(&hiwdg); /* 宽限期：只喂狗，不 arm */
+    (void)HAL_IWDG_Refresh(&hiwdg);
   }
 }

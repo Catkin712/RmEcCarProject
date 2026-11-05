@@ -30,6 +30,17 @@ namespace robot
 
     namespace
     {
+        /* 角度折回 (-π, π]：云台 yaw 关节角是多圈的（kNegInfToPosInf），
+         * 不折回的话“跟随”会朝一个永远到不了的多圈目标一路转下去。 */
+        inline float WrapPi(float a)
+        {
+            constexpr float kTwoPi = 6.283185307179586f;
+            constexpr float kPi = 3.14159265358979f;
+            while (a > kPi) { a -= kTwoPi; }
+            while (a < -kPi) { a += kTwoPi; }
+            return a;
+        }
+
         constexpr uint32_t kResurrectTicks = 100; ///< 自检保持 100 ms
         constexpr float kStickDeadband = 0.05f;
         constexpr float kMaxVx = 3.0f;         ///< m/s（待实测）
@@ -40,7 +51,22 @@ namespace robot
         constexpr uint8_t kSwitchUp = 1;
         constexpr uint8_t kSwitchDown = 2;
         constexpr uint8_t kSwitchMid = 3;
+
+        /* 底盘跟随云台（0x103）：误差(rad) → 角速度(rad/s) */
+        constexpr float kFollowKp = 6.0f;     ///< 与云台随动环同量级
+        constexpr float kFollowMaxW = 4.0f;   ///< 最多 4 rad/s，别把车甩出去
+        constexpr float kFollowMaxErr = 0.7f; ///< 误差超过 0.7 rad 直接满速
+        constexpr float kFollowDeadBand = 0.02f; ///< 约 1.1°，误差小于它不追
+        /* 云台状态机取值（与 GimbalMode 一一对应） */
+        constexpr uint8_t kGimbalModeFollow = 1; ///< 随动：底盘跟随云台
+        /* 段 2 里右摇杆转底盘的比例：满杆 6 rad/s × 0.5 = 3 rad/s */
+        constexpr float kFollowStickScale = 0.5f;
     } // namespace
+
+    /* Ozone 观察用：跟随是否生效、当前误差 */
+    static volatile uint8_t g_follow_on_dbg = 0U;
+    static volatile uint8_t g_follow_align_dbg = 0U; /* 1 = 云台正在等底盘对齐 */
+    static volatile float g_follow_err_dbg = 0.0f;
 
     void Robot::init(void)
     {
@@ -176,6 +202,55 @@ namespace robot
 
         case State::kWorking:
             cmd_vel_ = stick_to_velocity();
+            /* 底盘的转向只有两种来源，二者互斥：
+             *   随动(mode=1) 段1：底盘转到云台方向（云台锁绝对朝向，等着被追上）
+             *   随动(mode=1) 段2：右摇杆驱动底盘自旋，云台被带着一起转
+             *   分离(mode=2) / 云台失能：右摇杆归云台，底盘 w 恒 0
+             * 分离模式下底盘绝不能自旋：云台锁的是绝对朝向，底盘一转，
+             * θ_rel 就变，底盘会一直追着跑（之前“旋转随机”就是这么来的）。 */
+            {
+                robot::GimbalChassisComm *comm = GetGimbalChassisComm();
+                const bool gimbal_ok = (comm != nullptr) && !comm->isOffline() &&
+                                       comm->joint_data().active;
+                const bool follow_mode = gimbal_ok && (comm->joint_data().mode == kGimbalModeFollow);
+                const bool aligning = follow_mode && comm->joint_data().aligning;
+
+                g_follow_on_dbg = follow_mode ? 1U : 0U;
+                g_follow_align_dbg = aligning ? 1U : 0U;
+
+                if (aligning)
+                {
+                    /* 段 1：底盘转到云台方向。摇杆此时不参与“转向”，
+                     * 免得手动转向和自动对齐互相打架。 */
+                    const float err = WrapPi(comm->joint_data().yaw_rel);
+                    g_follow_err_dbg = err;
+                    if (fabsf(err) < kFollowDeadBand)
+                    {
+                        cmd_vel_.w = 0.0f;
+                    }
+                    else
+                    {
+                        cmd_vel_.w = (err > kFollowMaxErr) ? kFollowMaxW
+                                    : ((err < -kFollowMaxErr) ? -kFollowMaxW : kFollowKp * err);
+                    }
+                }
+                else if (follow_mode)
+                {
+                    /* 段 2：已对齐。右摇杆驱动底盘自旋，云台锁着关节角 0
+                     * 被一起带走——这才是“底盘和云台一起旋转”。 */
+                    float stick = stick_to_velocity().w * kFollowStickScale;
+                    if (fabsf(stick) < kFollowDeadBand)
+                    {
+                        stick = 0.0f;
+                    }
+                    cmd_vel_.w = stick;
+                }
+                else
+                {
+                    /* 分离：右摇杆归云台，底盘不转 */
+                    cmd_vel_.w = 0.0f;
+                }
+            }
             chassis_->set_velocity(cmd_vel_);
             chassis_->set_enabled(true);
             break;

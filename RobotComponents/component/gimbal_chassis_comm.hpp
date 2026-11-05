@@ -68,6 +68,17 @@ namespace robot
       bool rc_online = false; ///< 遥控器是否在线
     };
 
+    /* 云台→底盘 的关节状态帧（0x103）：底盘用它做“底盘跟随云台”。
+     * 0x102 的 8 字节已经排满，关节角另开一帧，100 Hz 发送即可。 */
+    struct JointData
+    {
+      float yaw_rel = 0.0f; ///< 云台相对底盘的 yaw 关节角，rad
+      float pitch = 0.0f;   ///< 云台 pitch 关节角，rad（水平为 0）
+      uint8_t mode = 0;     ///< 云台状态机：0 失能 / 1 随动 / 2 分离
+      bool active = false;  ///< 云台是否处于工作状态
+      bool aligning = false; ///< 随动模式下是否处于“底盘转到云台方向”阶段
+    };
+
     GimbalChassisComm(CodePart code_part, uint32_t tx_id, uint32_t rx_id);
 
     /* 编码己方帧：把本地 ChassisData / GimbalData 打包进 8 字节。 */
@@ -75,12 +86,17 @@ namespace robot
     /* 解码对方帧：把 8 字节还原成对方语义并更新本地缓存。 */
     void decode(const uint8_t rx_data[8]);
 
+    /* 编码/解码关节状态帧（0x103，只有云台发、底盘收）。 */
+    void encodeJoint(uint8_t tx_data[8]);
+    bool decodeJoint(const uint8_t rx_data[8]);
+
     /* 判断对方是否离线（超过阈值时长未收到新帧）。 */
     bool isOffline() const;
 
     /* 数据访问（供 RobotModules / Task 读写）。 */
     ChassisData &chassis_data() { return chassis_data_; }
     GimbalData &gimbal_data() { return gimbal_data_; }
+    JointData &joint_data() { return joint_data_; }
     const ChassisData &chassis_data() const { return chassis_data_; }
     const GimbalData &gimbal_data() const { return gimbal_data_; }
 
@@ -98,10 +114,17 @@ namespace robot
     uint32_t last_rx_tick_; ///< 上次收到对方帧的 GetTickMs() 时间戳
     ChassisData chassis_data_;
     GimbalData gimbal_data_;
+    JointData joint_data_;
     uint8_t tx_seq_ = 0; ///< 发送序号
+    uint8_t tx_joint_seq_ = 0; ///< 关节帧序号
     uint8_t rx_seq_ = 0; ///< 对方最近一帧的序号
     uint32_t rx_cnt_ = 0;
     uint32_t crc_err_cnt_ = 0;
+    uint32_t joint_rx_cnt_ = 0;     ///< 0x103 有效帧数
+    uint32_t joint_crc_err_cnt_ = 0; ///< 0x103 CRC 错帧数
+  public:
+    uint32_t joint_rx_cnt(void) const { return joint_rx_cnt_; }
+    uint32_t joint_crc_err_cnt(void) const { return joint_crc_err_cnt_; }
   };
   /* Exported variables --------------------------------------------------------*/
   /* Exported function prototypes ----------------------------------------------*/

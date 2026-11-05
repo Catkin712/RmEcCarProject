@@ -14,27 +14,15 @@
  */
 /* Includes ------------------------------------------------------------------*/
 #include "ins_imu.hpp"
+#include "imu.hpp"
 /* Private macro -------------------------------------------------------------*/
 /* Private constants ---------------------------------------------------------*/
 /* Private types -------------------------------------------------------------*/
 /* Private variables ---------------------------------------------------------*/
+static hello_world::imu::Imu g_imu;
 /* External variables --------------------------------------------------------*/
 /* Private function prototypes -----------------------------------------------*/
 /* Exported function definitions ---------------------------------------------*/
-hello_world::imu::Imu *GetImu() {
-  /* TODO【新人任务】:
-   * 返回本板 IMU 单例。
-   *
-   * 你要做：
-   *   1. 静态定义一个 Imu 对象（类由你在 inc/imu.hpp 补全：BMI088 原始读取 +
-   *      Mahony 姿态 + 开机零漂）。
-   *   2. 返回其地址。
-   *
-   * 约束 / 提示：
-   *   - Imu 类的定义见 inc/imu.hpp 的 TODO；本文件只负责实例化并返回地址。
-   *   - 姿态角 / 零漂未就绪前，上层状态机应保持在 Dead / Resurrection（见 RobotModules TODO）。
-   */
-  return nullptr;
-}
+hello_world::imu::Imu *GetImu() { return &g_imu; }
 
 /* Private function definitions ----------------------------------------------*/

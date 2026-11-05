@@ -83,6 +83,7 @@ int main(void)
   HAL_Init();
 
   /* USER CODE BEGIN Init */
+  __HAL_DBGMCU_FREEZE_IWDG(); /* 调试器 halt 时冻结看门狗，断点不再被复位打断 */
   /* USER CODE END Init */
 
   /* Configure the system clock */
