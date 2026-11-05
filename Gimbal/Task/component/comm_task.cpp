@@ -28,6 +28,40 @@
 #include "gimbal_chassis_comm.hpp"     /* 完整类型：encode()/tx_id() */
 #include "ins_chassis_gimbal_comm.hpp" /* GetGimbalChassisComm */
 
+namespace
+{
+/* 云台控制参数（2026-11-05 实测标定） */
+/* pitch 机械行程（水平为 0 的关节角，见 ins_motor.cpp 的 kPitchAngleOffset）：
+ * 实测上限 -2.6815 → +0.231（抬 13.2°），下限 -3.0494 → -0.137（压 7.9°）。
+ * 软件限位两端各留约 1.7° 余量，防止顶死结构。 */
+constexpr float kPitchLimitMax = 0.20f;  /* 抬头极限 */
+constexpr float kPitchLimitMin = -0.10f; /* 低头极限 */
+constexpr float kPitchRate = 1.5f;    /* 摇杆满程时俯仰角速度，rad/s */
+constexpr float kYawRate = 6.0f;      /* 摇杆满程时 yaw 角速度，rad/s */
+constexpr float kRcDeadBand = 0.05f;  /* 摇杆死区 */
+constexpr float kPitchKp = 40.0f;     /* MIT 内置 PD：kp ∈ [0, 500] */
+constexpr float kPitchKd = 1.0f;      /* kd ∈ [0, 5] */
+constexpr float kYawKd = 1.0f;
+constexpr float kDt = 0.001f;         /* TIM6 = 1 kHz，固定步长 */
+
+/* 摇杆死区 + 重新线性映射：死区外从 0 平滑到 1，避免"一过死区就跳" */
+inline float ApplyDeadBand(float v)
+{
+  const float a = (v < 0.0f) ? -v : v;
+  if (a < kRcDeadBand)
+  {
+    return 0.0f;
+  }
+  return (v > 0.0f) ? (v - kRcDeadBand) / (1.0f - kRcDeadBand)
+                    : (v + kRcDeadBand) / (1.0f - kRcDeadBand);
+}
+
+inline float Bound(float v, float lo, float hi)
+{
+  return (v < lo) ? lo : ((v > hi) ? hi : v);
+}
+} // namespace
+
 /* Private variables ---------------------------------------------------------*/
 static uint8_t dbus_rx_buf[hello_world::remote_control::kRcRxDataLen];
 /* 三个状态量：放在文件作用域、用 static（不用匿名 namespace），
@@ -53,6 +87,10 @@ static volatile uint8_t g_yaw_enabled_dbg = 0;   /* 1=已使能 */
 static volatile uint8_t g_pitch_enabled_dbg = 0;
 static volatile uint32_t g_yaw_tx_id_dbg = 0;   /* 本帧用的发送 ID */
 static volatile uint32_t g_pitch_tx_id_dbg = 0;
+/* 控制环的中间量（也是 Ozone 观察点） */
+static volatile float g_pitch_des_dbg = 0.0f;   /* pitch 目标角（rad） */
+static volatile float g_yaw_vel_des_dbg = 0.0f; /* yaw 目标角速度（rad/s） */
+static volatile uint8_t g_gimbal_active_dbg = 0;
 
 /* Private function prototypes -----------------------------------------------*/
 bool RcIsOnline(void); /* 定义在本文件末尾，CommTask 要先用 */
@@ -102,10 +140,9 @@ void CommTask(void)
 }
 
 /**
- * @brief   云台关节环（1 kHz，当前是“只读自检”阶段）
- * @note    kp=kd=torq 全 0 的 MIT 指令 = 使能但不发力：
- *          电机只回报角度/速度/温度，可以安全地手转关节找限位和零位。
- *          等角度/方向/限位都确认了，再把 kp、kd 换成真实参数。
+ * @brief   云台关节环（1 kHz）
+ * @note    yaw 用 MIT 内置 PD 的速度模式（kp=0，只跟角速度），
+ *          pitch 用位置模式（kp 把目标角拉住），两端都有软件限位。
  */
 void GimbalTask(void)
 {
@@ -113,32 +150,66 @@ void GimbalTask(void)
       static_cast<hello_world::motor::DM_J4310 *>(GetMotorYaw());
   hello_world::motor::DM_J4310 *pitch =
       static_cast<hello_world::motor::DM_J4310 *>(GetMotorPitch());
+  const hello_world::remote_control::DT7 *rc = GetRemoteControl();
 
-  uint8_t frame[8] = {0};
-
-  /* ① yaw 走 CAN1（和底盘 4 个 M3508 共用一条总线） */
-  (void)yaw->setMitInput(0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
-  if (yaw->encode(frame)) {
-    (void)CAN_Send_Msg(&hcan1, frame, yaw->tx_id(), 8);
-    g_yaw_tx_cnt = g_yaw_tx_cnt + 1U;
-  }
-  g_yaw_tx_id_dbg = yaw->tx_id();
-
-  /* ② pitch 走 CAN2（这条总线上只有它一个） */
-  (void)pitch->setMitInput(0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
-  if (pitch->encode(frame)) {
-    (void)CAN_Send_Msg(&hcan2, frame, pitch->tx_id(), 8);
-    g_pitch_tx_cnt = g_pitch_tx_cnt + 1U;
-  }
-  g_pitch_tx_id_dbg = pitch->tx_id();
-
-  /* ③ 把反馈搬进 Ozone 能看的变量（函数返回值在 Ozone 里看不到） */
+  /* ① 先把反馈搬进 Ozone 能看的变量 */
   g_yaw_angle_dbg = yaw->angle();
   g_pitch_angle_dbg = pitch->angle();
   g_yaw_vel_dbg = yaw->vel();
   g_pitch_vel_dbg = pitch->vel();
   g_yaw_enabled_dbg = yaw->is_enabled() ? 1U : 0U;
   g_pitch_enabled_dbg = pitch->is_enabled() ? 1U : 0U;
+
+  /* ② 使能条件与底盘保持一致：遥控在线 + 左拨杆最上 + 右拨杆不在最下（急停） */
+  const bool active =
+      RcIsOnline() &&
+      (rc->rc_l_switch() == hello_world::remote_control::kSwitchStateUp) &&
+      (rc->rc_r_switch() != hello_world::remote_control::kSwitchStateDown);
+  g_gimbal_active_dbg = active ? 1U : 0U;
+
+  float yaw_vel_des = 0.0f;
+
+  if (active)
+  {
+    /* yaw：右推 → 顺时针。实测"顺时针读数减小、逆时针为正"，所以取负号 */
+    yaw_vel_des = -ApplyDeadBand(rc->rc_rh()) * kYawRate;
+
+    /* pitch：摇杆积分成目标角（松杆保持当前角度），再夹到机械限位内 */
+    g_pitch_des_dbg = Bound(
+        g_pitch_des_dbg + ApplyDeadBand(rc->rc_lv()) * kPitchRate * kDt,
+        kPitchLimitMin, kPitchLimitMax);
+
+    /* MIT 内置 PD：
+     *   yaw   → kp=0、kd 阻尼，纯速度环，不锁角度所以能 360° 连续转
+     *   pitch → 位置环，kp 拉目标、kd 抑制过冲 */
+    (void)yaw->setMitInput(0.0f, yaw_vel_des, 0.0f, kYawKd, 0.0f);
+    (void)pitch->setMitInput(g_pitch_des_dbg, 0.0f, kPitchKp, kPitchKd, 0.0f);
+  }
+  else
+  {
+    /* 不工作时零力矩：使能但不发力，可手转；同时把目标对齐当前角，
+     * 下次使能瞬间不会突然拉过去 */
+    g_pitch_des_dbg = Bound(g_pitch_angle_dbg, kPitchLimitMin, kPitchLimitMax);
+    (void)yaw->setMitInput(0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
+    (void)pitch->setMitInput(0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
+  }
+  g_yaw_vel_des_dbg = yaw_vel_des;
+
+  /* ③ 组帧下发 */
+  uint8_t frame[8] = {0};
+  if (yaw->encode(frame))
+  {
+    (void)CAN_Send_Msg(&hcan1, frame, yaw->tx_id(), 8);
+    g_yaw_tx_cnt = g_yaw_tx_cnt + 1U;
+  }
+  g_yaw_tx_id_dbg = yaw->tx_id();
+
+  if (pitch->encode(frame))
+  {
+    (void)CAN_Send_Msg(&hcan2, frame, pitch->tx_id(), 8);
+    g_pitch_tx_cnt = g_pitch_tx_cnt + 1U;
+  }
+  g_pitch_tx_id_dbg = pitch->tx_id();
 }
 
 /* Private function definitions ----------------------------------------------*/

@@ -37,11 +37,11 @@ static volatile uint32_t can1_unknown_cnt = 0;     /* CAN1 未命中路由的帧
 static volatile uint32_t can1_last_unknown_id = 0; /* 最近一个未命中的 ID */
 static volatile uint32_t link_rx_cnt = 0;          /* 命中双板帧 ID 的帧数（含 CRC 错） */
 
-/* CAN2（pitch 达妙）的计数：CAN2 用 FIFO1，所以单独一套 */
+/* CAN2（pitch 达妙）的计数 */
 static volatile uint32_t can2_rx_cnt = 0;
 static volatile uint32_t can2_unknown_cnt = 0;
 static volatile uint32_t can2_last_unknown_id = 0;
-/* 两路达妙反馈的总命中数；只有这个涨，说明 ID 猜对了 */
+/* 两路达妙反馈的总命中数 */
 static volatile uint32_t dm_rx_cnt = 0;
 
 /* Exported function definitions ---------------------------------------------*/
