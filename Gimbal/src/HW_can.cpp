@@ -23,6 +23,7 @@
 #include "can.h"
 #include "gimbal_chassis_comm.hpp"     /* 完整类型：rx_id()/decode() */
 #include "ins_chassis_gimbal_comm.hpp" /* GetGimbalChassisComm */
+#include "ins_motor.hpp"               /* GetMotorYaw/GetMotorPitch 与 ID */
 
 /* Private variables ---------------------------------------------------------*/
 static CAN_RxHeaderTypeDef rx_header1;
@@ -35,6 +36,13 @@ static volatile uint32_t can1_rx_cnt = 0;          /* CAN1 取走的帧数（不
 static volatile uint32_t can1_unknown_cnt = 0;     /* CAN1 未命中路由的帧数 */
 static volatile uint32_t can1_last_unknown_id = 0; /* 最近一个未命中的 ID */
 static volatile uint32_t link_rx_cnt = 0;          /* 命中双板帧 ID 的帧数（含 CRC 错） */
+
+/* CAN2（pitch 达妙）的计数：CAN2 用 FIFO1，所以单独一套 */
+static volatile uint32_t can2_rx_cnt = 0;
+static volatile uint32_t can2_unknown_cnt = 0;
+static volatile uint32_t can2_last_unknown_id = 0;
+/* 两路达妙反馈的总命中数；只有这个涨，说明 ID 猜对了 */
+static volatile uint32_t dm_rx_cnt = 0;
 
 /* Exported function definitions ---------------------------------------------*/
 
@@ -102,13 +110,22 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
 
       robot::GimbalChassisComm *comm = GetGimbalChassisComm();
 
-      /* 云台 CAN1 目前只挂底盘发来的双板帧（0x101）。
+      /* 云台 CAN1 上挂两类帧：
+       *   1) 底盘发来的双板帧 0x101；
+       *   2) yaw 达妙的反馈帧（id + 0x10）。
        * 先按 4 个条件筛，避免把扩展帧/远程帧/短帧喂给 decode。 */
       if (rx_header1.IDE == CAN_ID_STD && rx_header1.RTR == CAN_RTR_DATA &&
           rx_header1.DLC == 8U && rx_header1.StdId == comm->rx_id())
       {
         comm->decode(can1_rx_data);
         link_rx_cnt = link_rx_cnt + 1U; /* 含 CRC 错的帧；成功解包数看 g_comm.rx_cnt_ */
+      }
+      else if (rx_header1.IDE == CAN_ID_STD &&
+               rx_header1.StdId == (0x10U + GetYawMotorId()))
+      {
+        /* 达妙反馈帧：数据交给电机解码（角度/速度/力矩/温度/状态码） */
+        GetMotorYaw()->decode(can1_rx_data);
+        dm_rx_cnt = dm_rx_cnt + 1U;
       }
       else
       {
@@ -131,7 +148,21 @@ void HAL_CAN_RxFifo1MsgPendingCallback(CAN_HandleTypeDef *hcan)
   if (hcan == &hcan2) {
     if (HAL_CAN_GetRxMessage(hcan, CAN_RX_FIFO1, &rx_header2,
                              can2_rx_data) == HAL_OK) {
-      /* TODO【新人任务】: 同 FIFO0，按 rx_header2.StdId 路由 8 字节 can2_rx_data。 */
+      can2_rx_cnt = can2_rx_cnt + 1U;
+
+      /* 云台 CAN2 只挂 pitch 达妙（反馈 ID = id + 0x10） */
+      if (rx_header2.IDE == CAN_ID_STD && rx_header2.RTR == CAN_RTR_DATA &&
+          rx_header2.DLC == 8U &&
+          rx_header2.StdId == (0x10U + GetPitchMotorId()))
+      {
+        GetMotorPitch()->decode(can2_rx_data);
+        dm_rx_cnt = dm_rx_cnt + 1U;
+      }
+      else
+      {
+        can2_unknown_cnt = can2_unknown_cnt + 1U;
+        can2_last_unknown_id = rx_header2.StdId;
+      }
     }
   }
   HAL_CAN_ActivateNotification(hcan, CAN_IT_RX_FIFO1_MSG_PENDING);

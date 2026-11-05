@@ -37,7 +37,7 @@ namespace robot
             float wheel = 0.0f; ///< 轮电机电流给定
         };
 
-        /* 几何与限幅（考核说明第七节；速度上限待实测） */
+        /* 几何与限幅 */
         static constexpr float kWheelRadius = 0.066f;
         static constexpr float kHalfBase = 0.167f;
         static constexpr float kHalfTrack = 0.167f;

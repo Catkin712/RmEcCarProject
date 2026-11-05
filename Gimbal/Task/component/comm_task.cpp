@@ -17,8 +17,10 @@
 
 #include "DT7.hpp"      /* DT7::rc_xxx()，协议层不直接依赖它 */
 #include "HW_can.hpp"   /* CanFilter_Init / CAN_Send_Msg */
-#include "can.h"        /* hcan1 */
+#include "can.h"        /* hcan1 / hcan2 */
 #include "ins_comm.hpp" /* GetRemoteControl */
+#include "ins_motor.hpp"     /* GetMotorYaw / GetMotorPitch */
+#include "motor_DaMiao.hpp"  /* 完整类型：setMitInput / encode / tx_id */
 #include "usart.h"      /* huart3 */
 #include "iwdg.h"
 #include "tick.hpp" /* hello_world::tick::GetTickMs() */
@@ -40,6 +42,18 @@ static volatile uint32_t rc_err_cnt = 0; /* 长度不对、被丢弃的次数 */
 static volatile uint32_t tick_now = 0;
 static volatile uint32_t link_tx_cnt = 0; /* 已发出的 0x102 帧数 */
 
+/* 云台关节自检用的观察量（Ozone 输入名字即可） */
+static volatile uint32_t g_yaw_tx_cnt = 0;    /* yaw MIT 帧成功入邮箱次数 */
+static volatile uint32_t g_pitch_tx_cnt = 0;  /* pitch MIT 帧成功入邮箱次数 */
+static volatile float g_yaw_angle_dbg = 0.0f;   /* yaw 反馈角（rad） */
+static volatile float g_pitch_angle_dbg = 0.0f; /* pitch 反馈角（rad） */
+static volatile float g_yaw_vel_dbg = 0.0f;
+static volatile float g_pitch_vel_dbg = 0.0f;
+static volatile uint8_t g_yaw_enabled_dbg = 0;   /* 1=已使能 */
+static volatile uint8_t g_pitch_enabled_dbg = 0;
+static volatile uint32_t g_yaw_tx_id_dbg = 0;   /* 本帧用的发送 ID */
+static volatile uint32_t g_pitch_tx_id_dbg = 0;
+
 /* Private function prototypes -----------------------------------------------*/
 bool RcIsOnline(void); /* 定义在本文件末尾，CommTask 要先用 */
 
@@ -48,11 +62,15 @@ void CommTaskInit(void)
 {
   g_boot_tick = hello_world::tick::GetTickMs();
 
-  /* 云台 CAN1：只接底盘发来的 0x101，滤波器把 FIFO0/bank0 全收。
-   * 云台 CAN2（Pitch 达妙）等任务 8 再开，现在不启动。 */
+  /* 云台 CAN1：底盘 0x101 + yaw 达妙反馈，FIFO0/bank0 全收；
+   * 云台 CAN2：pitch 达妙反馈，FIFO1/bank14 全收。 */
   CanFilter_Init(&hcan1);
   (void)HAL_CAN_Start(&hcan1);
   (void)HAL_CAN_ActivateNotification(&hcan1, CAN_IT_RX_FIFO0_MSG_PENDING);
+
+  CanFilter_Init(&hcan2);
+  (void)HAL_CAN_Start(&hcan2);
+  (void)HAL_CAN_ActivateNotification(&hcan2, CAN_IT_RX_FIFO1_MSG_PENDING);
 
   // 启动 DBUS 接收（空闲中断 + DMA）
   (void)HAL_UARTEx_ReceiveToIdle_DMA(
@@ -81,6 +99,46 @@ void CommTask(void)
   comm->encode(frame);
   (void)CAN_Send_Msg(&hcan1, frame, comm->tx_id(), 8);
   link_tx_cnt = link_tx_cnt + 1U;
+}
+
+/**
+ * @brief   云台关节环（1 kHz，当前是“只读自检”阶段）
+ * @note    kp=kd=torq 全 0 的 MIT 指令 = 使能但不发力：
+ *          电机只回报角度/速度/温度，可以安全地手转关节找限位和零位。
+ *          等角度/方向/限位都确认了，再把 kp、kd 换成真实参数。
+ */
+void GimbalTask(void)
+{
+  hello_world::motor::DM_J4310 *yaw =
+      static_cast<hello_world::motor::DM_J4310 *>(GetMotorYaw());
+  hello_world::motor::DM_J4310 *pitch =
+      static_cast<hello_world::motor::DM_J4310 *>(GetMotorPitch());
+
+  uint8_t frame[8] = {0};
+
+  /* ① yaw 走 CAN1（和底盘 4 个 M3508 共用一条总线） */
+  (void)yaw->setMitInput(0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
+  if (yaw->encode(frame)) {
+    (void)CAN_Send_Msg(&hcan1, frame, yaw->tx_id(), 8);
+    g_yaw_tx_cnt = g_yaw_tx_cnt + 1U;
+  }
+  g_yaw_tx_id_dbg = yaw->tx_id();
+
+  /* ② pitch 走 CAN2（这条总线上只有它一个） */
+  (void)pitch->setMitInput(0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
+  if (pitch->encode(frame)) {
+    (void)CAN_Send_Msg(&hcan2, frame, pitch->tx_id(), 8);
+    g_pitch_tx_cnt = g_pitch_tx_cnt + 1U;
+  }
+  g_pitch_tx_id_dbg = pitch->tx_id();
+
+  /* ③ 把反馈搬进 Ozone 能看的变量（函数返回值在 Ozone 里看不到） */
+  g_yaw_angle_dbg = yaw->angle();
+  g_pitch_angle_dbg = pitch->angle();
+  g_yaw_vel_dbg = yaw->vel();
+  g_pitch_vel_dbg = pitch->vel();
+  g_yaw_enabled_dbg = yaw->is_enabled() ? 1U : 0U;
+  g_pitch_enabled_dbg = pitch->is_enabled() ? 1U : 0U;
 }
 
 /* Private function definitions ----------------------------------------------*/
