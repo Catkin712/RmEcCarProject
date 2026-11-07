@@ -52,6 +52,7 @@ namespace robot
         bool enabled(void) const { return enabled_; }
 
         void set_velocity(const Velocity &v) { vel_ = v; }
+        void set_lock(bool on) { lock_ = on; }
         const Velocity &velocity(void) const { return vel_; }
         const WheelCmd &wheel_cmd(int idx) const { return cmd_[idx]; }
         const WheelInput &wheel_input(int idx) const { return input_[idx]; }
@@ -61,9 +62,10 @@ namespace robot
 
         /* 纯函数，可桌面单测（任务 5 已给） */
         static void Solve(const Velocity &v, const float current_angle[kWheelNum],
-                          WheelCmd out[kWheelNum]);
+                          WheelCmd out[kWheelNum], bool lock = false);
 
     private:
+        bool lock_ = false;
         Velocity vel_{};
         WheelCmd cmd_[kWheelNum]{};
         WheelInput input_[kWheelNum]{};
@@ -82,7 +84,7 @@ namespace robot
     } // namespace detail
 
     inline void Chassis::Solve(const Velocity &v, const float cur[kWheelNum],
-                               WheelCmd out[kWheelNum])
+                               WheelCmd out[kWheelNum], bool lock)
     {
         static constexpr float kPos[kWheelNum][2] = {
             {+kHalfBase, +kHalfTrack}, /* 0 左前 */
@@ -90,6 +92,17 @@ namespace robot
             {-kHalfBase, -kHalfTrack}, /* 2 右后 */
             {+kHalfBase, -kHalfTrack}, /* 3 右前 */
         };
+
+        if (lock) // 进自锁
+        {
+            for (int i = 0; i < kWheelNum; ++i)
+            {
+                out[i].angle = detail::WrapPi(atan2f(kPos[i][1], kPos[i][0]) + detail::kHalfPi);
+                out[i].speed = 0.0f;
+            }
+
+            return;
+        }
 
         for (int i = 0; i < kWheelNum; ++i)
         {

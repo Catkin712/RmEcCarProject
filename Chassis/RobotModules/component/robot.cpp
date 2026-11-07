@@ -21,7 +21,7 @@
 
 #include <cmath>
 
-#include "gimbal_chassis_comm.hpp"   /* 新增：GimbalChassisComm 的完整定义 */
+#include "gimbal_chassis_comm.hpp" /* 新增：GimbalChassisComm 的完整定义 */
 #include "ins_chassis_gimbal_comm.hpp"
 #include "ins_motor.hpp"
 
@@ -36,10 +36,18 @@ namespace robot
         {
             constexpr float kTwoPi = 6.283185307179586f;
             constexpr float kPi = 3.14159265358979f;
-            while (a > kPi) { a -= kTwoPi; }
-            while (a < -kPi) { a += kTwoPi; }
+            while (a > kPi)
+            {
+                a -= kTwoPi;
+            }
+            while (a < -kPi)
+            {
+                a += kTwoPi;
+            }
             return a;
         }
+
+        static uint32_t lock_cnt_ = 0; /* 50ms自锁 */
 
         constexpr uint32_t kResurrectTicks = 100; ///< 自检保持 100 ms
         constexpr float kStickDeadband = 0.05f;
@@ -53,9 +61,9 @@ namespace robot
         constexpr uint8_t kSwitchMid = 3;
 
         /* 底盘跟随云台（0x103）：误差(rad) → 角速度(rad/s) */
-        constexpr float kFollowKp = 6.0f;     ///< 与云台随动环同量级
-        constexpr float kFollowMaxW = 4.0f;   ///< 最多 4 rad/s，别把车甩出去
-        constexpr float kFollowMaxErr = 0.7f; ///< 误差超过 0.7 rad 直接满速
+        constexpr float kFollowKp = 6.0f;        ///< 与云台随动环同量级
+        constexpr float kFollowMaxW = 4.0f;      ///< 最多 4 rad/s，别把车甩出去
+        constexpr float kFollowMaxErr = 0.7f;    ///< 误差超过 0.7 rad 直接满速
         constexpr float kFollowDeadBand = 0.02f; ///< 约 1.1°，误差小于它不追
         /* 云台状态机取值（与 GimbalMode 一一对应） */
         constexpr uint8_t kGimbalModeFollow = 1; ///< 随动：底盘跟随云台
@@ -171,6 +179,8 @@ namespace robot
         switch (state_)
         {
         case State::kDead:
+            lock_cnt_ = 0;
+            chassis_->set_lock(false);
             cmd_vel_ = Chassis::Velocity{};
             chassis_->set_velocity(cmd_vel_);
             chassis_->set_enabled(false);
@@ -178,6 +188,8 @@ namespace robot
 
         case State::kResurrection:
         {
+            lock_cnt_ = 0;
+            chassis_->set_lock(false);
             bool still = true;
             for (int i = 0; i < Chassis::kWheelNum; ++i)
             {
@@ -220,8 +232,7 @@ namespace robot
 
                 if (aligning)
                 {
-                    /* 段 1：底盘转到云台方向。摇杆此时不参与“转向”，
-                     * 免得手动转向和自动对齐互相打架。 */
+                    /* 段 1：底盘转到云台方向。摇杆此时不参与“转向” */
                     const float err = WrapPi(comm->joint_data().yaw_rel);
                     g_follow_err_dbg = err;
                     if (fabsf(err) < kFollowDeadBand)
@@ -231,7 +242,7 @@ namespace robot
                     else
                     {
                         cmd_vel_.w = (err > kFollowMaxErr) ? kFollowMaxW
-                                    : ((err < -kFollowMaxErr) ? -kFollowMaxW : kFollowKp * err);
+                                                           : ((err < -kFollowMaxErr) ? -kFollowMaxW : kFollowKp * err);
                     }
                 }
                 else if (follow_mode)
@@ -251,6 +262,18 @@ namespace robot
                     cmd_vel_.w = 0.0f;
                 }
             }
+            if (fabsf(cmd_vel_.vx) < kStickDeadband && fabsf(cmd_vel_.vy) < kStickDeadband && fabsf(cmd_vel_.w) < kStickDeadband)
+            {
+                lock_cnt_++;
+                if (lock_cnt_ > 50)
+                    chassis_->set_lock(true);
+            }
+            else
+            {
+                lock_cnt_ = 0;
+                chassis_->set_lock(false);
+            }
+
             chassis_->set_velocity(cmd_vel_);
             chassis_->set_enabled(true);
             break;

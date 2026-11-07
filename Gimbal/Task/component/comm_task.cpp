@@ -154,6 +154,8 @@ static bool g_follow_aligning = false;            /* true = 正在等底盘转�
 static volatile uint8_t g_follow_aligning_dbg = 0;/* Ozone：1 = 对齐阶段 */
 static constexpr float kAlignEnterRad = 0.12f;    /* 超过这个误差 → 进入对齐阶段 */
 static constexpr float kAlignExitRad = 0.03f;     /* 低于这个误差 → 认为已对齐 */
+static constexpr float kAlignExitRate = 0.10f;    /* 关节角速度低于此值才算"底盘真的停了"，rad/s */
+static volatile float g_align_rate_dbg = 0.0f;    /* 关节角速度（= 对齐阶段底盘的转速） */
 static volatile float g_yaw_free_yaw_dbg = 0.0f;  /* IMU 当前绝对朝向 */
 static volatile float g_yaw_free_err_dbg = 0.0f;  /* 锁定值 − 当前值（rad） */
 /* 排查用：Ozone 里把 g_dbg_force_follow 改成 1，可无视拨杆强制进随动 */
@@ -287,6 +289,24 @@ void GimbalTask(void)
   {
     g_yaw_des_dbg = g_yaw_angle_dbg;
     g_pitch_des_dbg = Bound(g_pitch_angle_dbg, kPitchLimitMin, kPitchLimitMax);
+    /* 清掉上一次随动的"对齐中"状态。
+     * 不清的话：在随动里对齐到一半切去分离，g_follow_aligning 还留着 true，
+     * 再切回随动时不会重新锁存朝向，而是拿旧的锁去算误差——云台会一路
+     * 拽回"分离前的角度"。清掉后由 kFollow 分支按当前 rel 重新判定/锁存。 */
+    g_follow_aligning = false;
+    g_follow_aligning_dbg = 0U;
+    if (mode == GimbalMode::kFollow)
+    {
+      /* 切进随动的第一拍：只要云台相对底盘有可见夹角，就先进"对齐段"。
+       * 此时云台锁住**当前绝对朝向**（原地不动），底盘负责转过来；
+       * 而不是让云台自己转过去对齐底盘（那样云台会"甩"一下，像随机动作）。 */
+      const float rel_now = WrapPi(g_yaw_angle_dbg);
+      if (fabsf(rel_now) > kAlignExitRad)
+      {
+        g_follow_aligning = true;
+        g_yaw_follow_lock = GetImu()->yaw();
+      }
+    }
     if (mode == GimbalMode::kFree)
     {
       /* 进入分离的瞬间：把"当前绝对朝向"记为锁定值。
@@ -312,14 +332,22 @@ void GimbalTask(void)
        * 摇杆在随动模式下不再驱动云台：右摇杆交给底盘自旋。 */
       const float rel = WrapPi(g_yaw_angle_dbg);
 
+      /* 关节角速度。对齐阶段云台锁着绝对朝向，底盘还在转的话，
+       * 电机测到的相对角速度就等于底盘当前的转速——用它判断"底盘停没停"。 */
+      const float joint_rate = yaw->vel();
+      g_align_rate_dbg = joint_rate;
+
       if (!g_follow_aligning && (fabsf(rel) > kAlignEnterRad))
       {
         /* 进入对齐段：以"此刻的绝对朝向"为锁，避免云台回弹到更早的朝向 */
         g_follow_aligning = true;
         g_yaw_follow_lock = GetImu()->yaw();
       }
-      else if (g_follow_aligning && (fabsf(rel) < kAlignExitRad))
+      else if (g_follow_aligning && (fabsf(rel) < kAlignExitRad) &&
+               (fabsf(joint_rate) < kAlignExitRate))
       {
+        /* 角度对齐 + 底盘基本停住，才把云台从"锁绝对"释放成"锁关节"。
+         * 只看角度就释放的话，底盘还带着惯性转，云台会被拖着走一段角度。 */
         g_follow_aligning = false;
       }
       g_follow_aligning_dbg = g_follow_aligning ? 1U : 0U;

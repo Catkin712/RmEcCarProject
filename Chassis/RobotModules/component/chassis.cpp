@@ -16,6 +16,8 @@ float g_steer_angle_dbg[4] = {0.0f, 0.0f, 0.0f, 0.0f};  /* 舵电机反馈角 ra
 float g_steer_target_dbg[4] = {0.0f, 0.0f, 0.0f, 0.0f}; /* 展开后的目标角 rad */
 float g_steer_out_dbg[4] = {0.0f, 0.0f, 0.0f, 0.0f};    /* 舵角环输出 raw */
 float g_wheel_out_dbg[4] = {0.0f, 0.0f, 0.0f, 0.0f};    /* 轮速环输出 raw */
+float g_wheel_cmd_dbg[4] = {0.0f, 0.0f, 0.0f, 0.0f};    /* 轮速环目标 rad/s */
+float g_wheel_vel_dbg[4] = {0.0f, 0.0f, 0.0f, 0.0f};    /* 轮速环反馈 rad/s */
 float g_chassis_vel_dbg[3] = {0.0f, 0.0f, 0.0f};        /* vx, vy, w */
 uint8_t g_chassis_enabled_dbg = 0;                      /* enabled_ 的镜像 */
 
@@ -64,7 +66,7 @@ namespace robot
         }
 
         /* 2. 逆解：得到每轮的目标舵角与目标轮速 */
-        Solve(vel_, cur, cmd_);
+        Solve(vel_, cur, cmd_, lock_);
 
         /* 目标角展开到当前角附近，避免 ±π 跳变（Ozone 里看到的就是真正送进 PID 的 ref） */
         for (int i = 0; i < kWheelNum; ++i)
@@ -93,6 +95,8 @@ namespace robot
 
             g_steer_out_dbg[i] = input_[i].steer;
             g_wheel_out_dbg[i] = input_[i].wheel;
+            g_wheel_cmd_dbg[i] = cmd_[i].speed;
+            g_wheel_vel_dbg[i] = GetMotorWheel(i)->vel();
         }
     }
 

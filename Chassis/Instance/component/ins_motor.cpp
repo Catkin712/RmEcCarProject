@@ -28,17 +28,17 @@ namespace
    */
   const hello_world::motor::OptionalParams kWheelParams[kWheelNum] = {
       /* idx0 左前 */ {.angle_range = hello_world::motor::AngleRange::kNegInfToPosInf, .dir = hello_world::motor::Dir::kDirRev},
-      /* idx1 左后 */ {.angle_range = hello_world::motor::AngleRange::kNegInfToPosInf},
+      /* idx1 左后 */ {.angle_range = hello_world::motor::AngleRange::kNegInfToPosInf, .dir = hello_world::motor::Dir::kDirRev},
       /* idx2 右后 */ {.angle_range = hello_world::motor::AngleRange::kNegInfToPosInf},
       /* idx3 右前 */ {.angle_range = hello_world::motor::AngleRange::kNegInfToPosInf},
   };
 
   /* 舵电机（GM6020）配置表 */
   const hello_world::motor::OptionalParams kSteerParams[kSteerNum] = {
-      /* idx0 左前 */ {.input_type = hello_world::motor::InputType::kCurr, .angle_range = hello_world::motor::AngleRange::kNegPiToPosPi, .dir = hello_world::motor::Dir::kDirRev, .angle_offset = -0.4994f},
-      /* idx1 左后 */ {.input_type = hello_world::motor::InputType::kCurr, .angle_range = hello_world::motor::AngleRange::kNegPiToPosPi, .dir = hello_world::motor::Dir::kDirRev, .angle_offset = -2.1026f},
-      /* idx2 右后 */ {.input_type = hello_world::motor::InputType::kCurr, .angle_range = hello_world::motor::AngleRange::kNegPiToPosPi, .dir = hello_world::motor::Dir::kDirRev, .angle_offset = 0.0767f},
-      /* idx3 右前 */ {.input_type = hello_world::motor::InputType::kCurr, .angle_range = hello_world::motor::AngleRange::kNegPiToPosPi, .dir = hello_world::motor::Dir::kDirRev, .angle_offset = 1.4252f},
+      /* idx0 左前 */ {.input_type = hello_world::motor::InputType::kCurr, .angle_range = hello_world::motor::AngleRange::kNegPiToPosPi, .dir = hello_world::motor::Dir::kDirRev, .angle_offset = -0.516184628f},
+      /* idx1 左后 */ {.input_type = hello_world::motor::InputType::kCurr, .angle_range = hello_world::motor::AngleRange::kNegPiToPosPi, .dir = hello_world::motor::Dir::kDirRev, .angle_offset = 1.06546915f},
+      /* idx2 右后 */ {.input_type = hello_world::motor::InputType::kCurr, .angle_range = hello_world::motor::AngleRange::kNegPiToPosPi, .dir = hello_world::motor::Dir::kDirRev, .angle_offset = -0.0117657688f},
+      /* idx3 右前 */ {.input_type = hello_world::motor::InputType::kCurr, .angle_range = hello_world::motor::AngleRange::kNegPiToPosPi, .dir = hello_world::motor::Dir::kDirRev, .angle_offset = 1.59693146f},
   };
 } // namespace
 /* Private types -------------------------------------------------------------*/
