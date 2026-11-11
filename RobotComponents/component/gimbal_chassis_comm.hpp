@@ -77,6 +77,7 @@ namespace robot
       uint8_t mode = 0;     ///< 云台状态机：0 失能 / 1 随动 / 2 分离
       bool active = false;  ///< 云台是否处于工作状态
       bool aligning = false; ///< 随动模式下是否处于“底盘转到云台方向”阶段
+      float joint_rate = 0.0f; ///< 关节角速度（底盘侧由相邻两帧差分得到，rad/s）
     };
 
     GimbalChassisComm(CodePart code_part, uint32_t tx_id, uint32_t rx_id);
@@ -122,6 +123,8 @@ namespace robot
     uint32_t crc_err_cnt_ = 0;
     uint32_t joint_rx_cnt_ = 0;     ///< 0x103 有效帧数
     uint32_t joint_crc_err_cnt_ = 0; ///< 0x103 CRC 错帧数
+    float joint_prev_rel_ = 0.0f;   ///< 上一帧的 yaw_rel，用于差分角速度
+    uint32_t joint_prev_tick_ = 0;  ///< 上一帧的接收时刻
   public:
     uint32_t joint_rx_cnt(void) const { return joint_rx_cnt_; }
     uint32_t joint_crc_err_cnt(void) const { return joint_crc_err_cnt_; }

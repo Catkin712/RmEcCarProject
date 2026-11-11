@@ -157,11 +157,28 @@ bool robot::GimbalChassisComm::decodeJoint(const uint8_t rx_data[8])
   {
     return false;
   }
-  joint_data_.yaw_rel = static_cast<float>(GetI16(rx_data + 0)) * 1e-3f;
+  const float yaw_rel = static_cast<float>(GetI16(rx_data + 0)) * 1e-3f;
+  joint_data_.yaw_rel = yaw_rel;
   joint_data_.pitch = static_cast<float>(GetI16(rx_data + 2)) * 1e-3f;
   joint_data_.mode = rx_data[4];
   joint_data_.active = (rx_data[5] & 0x01u) != 0;
   joint_data_.aligning = (rx_data[5] & 0x02u) != 0;
+
+  /* 关节角速度：底盘跟随要用它做阻尼，否则单靠比例项会在零点附近来回荡。
+   * 0x103 是 100 Hz，这里用相邻两帧的真实时间差做差分。dt 明显异常
+   * （首帧、丢帧）时保留上一次的值，避免把抖动当成速度。 */
+  const uint32_t now = hello_world::tick::GetTickMs();
+  if (joint_prev_tick_ != 0U)
+  {
+    const uint32_t dt = now - joint_prev_tick_;
+    if ((dt >= 5U) && (dt <= 30U))
+    {
+      joint_data_.joint_rate = (yaw_rel - joint_prev_rel_) * 1000.0f / static_cast<float>(dt);
+    }
+  }
+  joint_prev_rel_ = yaw_rel;
+  joint_prev_tick_ = now;
+
   ++joint_rx_cnt_;
   return true;
 }

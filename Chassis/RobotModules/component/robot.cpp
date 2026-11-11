@@ -62,6 +62,7 @@ namespace robot
 
         /* 底盘跟随云台（0x103）：误差(rad) → 角速度(rad/s) */
         constexpr float kFollowKp = 6.0f;        ///< 与云台随动环同量级
+        constexpr float kFollowKd = 0.5f;        ///< 关节转速阻尼，抑制零点附近的来回荡
         constexpr float kFollowMaxW = 4.0f;      ///< 最多 4 rad/s，别把车甩出去
         constexpr float kFollowMaxErr = 0.7f;    ///< 误差超过 0.7 rad 直接满速
         constexpr float kFollowDeadBand = 0.02f; ///< 约 1.1°，误差小于它不追
@@ -75,6 +76,7 @@ namespace robot
     static volatile uint8_t g_follow_on_dbg = 0U;
     static volatile uint8_t g_follow_align_dbg = 0U; /* 1 = 云台正在等底盘对齐 */
     static volatile float g_follow_err_dbg = 0.0f;
+    static volatile float g_joint_rate_dbg = 0.0f; /* 关节角速度（阻尼项输入） */
 
     void Robot::init(void)
     {
@@ -232,18 +234,49 @@ namespace robot
 
                 if (aligning)
                 {
-                    /* 段 1：底盘转到云台方向。摇杆此时不参与“转向” */
+                    /* 段 1：底盘转到云台方向。摇杆此时不参与“转向”。
+                     * 死区内不动；死区外把输出按 (|err| - deadband) 线性收口，
+                     * 让指令在死区边界连续地降到 0。
+                     * 直接给 kp*err 的话，指令会在 0 与 kp*deadband(≈0.12 rad/s)
+                     * 之间硬跳，底盘带着惯性冲过零点、再被反向推回来，于是围着
+                     * 零点来回荡个不停。 */
                     const float err = WrapPi(comm->joint_data().yaw_rel);
                     g_follow_err_dbg = err;
-                    if (fabsf(err) < kFollowDeadBand)
+                    const float ae = fabsf(err);
+                    float w = 0.0f;
+                    if (ae < kFollowDeadBand)
                     {
-                        cmd_vel_.w = 0.0f;
+                        w = 0.0f;
+                    }
+                    else if (ae > kFollowMaxErr)
+                    {
+                        w = (err > 0.0f) ? kFollowMaxW : -kFollowMaxW;
                     }
                     else
                     {
-                        cmd_vel_.w = (err > kFollowMaxErr) ? kFollowMaxW
-                                                           : ((err < -kFollowMaxErr) ? -kFollowMaxW : kFollowKp * err);
+                        w = kFollowKp * (ae - kFollowDeadBand);
+                        if (err < 0.0f)
+                        {
+                            w = -w;
+                        }
                     }
+
+                    /* 阻尼项：关节转速为负表示正在靠近目标。只加比例项时，
+                     * 底盘会带着惯性冲过零点、再被反向推回来，围着一个
+                     * 死区大小的窗口来回荡（实测 90° 阶跃要振 4 次才停）。
+                     * 这里按关节转速反向刹车，冲量在过零前就被吃掉。 */
+                    const float rate = comm->joint_data().joint_rate;
+                    g_joint_rate_dbg = rate;
+                    w += kFollowKd * rate;
+                    if (w > kFollowMaxW)
+                    {
+                        w = kFollowMaxW;
+                    }
+                    else if (w < -kFollowMaxW)
+                    {
+                        w = -kFollowMaxW;
+                    }
+                    cmd_vel_.w = w;
                 }
                 else if (follow_mode)
                 {
