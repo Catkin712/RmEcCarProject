@@ -26,6 +26,11 @@ namespace
 {
   constexpr int kWheelNum = 4;
   constexpr int kSteerNum = 4;
+  /* 低速起步 PI 试调值，尚未实机整定：
+   * Ki 单位 raw/((rad/s)*s)，积分项最多贡献 ±400 raw（输出上限的 5%）。
+   * 不是实测静摩擦补偿值；若触顶仍不动，应记录输出/反馈再调整。 */
+  constexpr float kWheelKi = 600.0f;
+  constexpr float kWheelIntegralLimit = 400.0f;
 
   /*
    * 单位：
@@ -33,10 +38,10 @@ namespace
    *   舵角环：ref/fb 单位 rad，  输出按 GM6020 raw 给（±25000）
    * 写法：指定初始化器，字段顺序要跟 Config 声明顺序一致 */
   const hello_world::pid::Pid::Config kWheelCfg[kWheelNum] = {
-      /* idx0 左前 */ {.kp = 200.0f, .ki = 0.0f, .kd = 0.0f, .ts = 0.001f, .out_lim = 8000.0f, .i_lim = 0.0f},
-      /* idx1 左后 */ {.kp = 200.0f, .ki = 0.0f, .kd = 0.0f, .ts = 0.001f, .out_lim = 8000.0f, .i_lim = 0.0f},
-      /* idx2 右后 */ {.kp = 200.0f, .ki = 0.0f, .kd = 0.0f, .ts = 0.001f, .out_lim = 8000.0f, .i_lim = 0.0f},
-      /* idx3 右前 */ {.kp = 200.0f, .ki = 0.0f, .kd = 0.0f, .ts = 0.001f, .out_lim = 8000.0f, .i_lim = 0.0f},
+      /* idx0 左前 */ {.kp = 200.0f, .ki = kWheelKi, .kd = 0.0f, .ts = 0.001f, .out_lim = 8000.0f, .i_lim = kWheelIntegralLimit},
+      /* idx1 左后 */ {.kp = 200.0f, .ki = kWheelKi, .kd = 0.0f, .ts = 0.001f, .out_lim = 8000.0f, .i_lim = kWheelIntegralLimit},
+      /* idx2 右后 */ {.kp = 200.0f, .ki = kWheelKi, .kd = 0.0f, .ts = 0.001f, .out_lim = 8000.0f, .i_lim = kWheelIntegralLimit},
+      /* idx3 右前 */ {.kp = 200.0f, .ki = kWheelKi, .kd = 0.0f, .ts = 0.001f, .out_lim = 8000.0f, .i_lim = kWheelIntegralLimit},
   };
 
   const hello_world::pid::Pid::Config kSteerCfg[kSteerNum] = {

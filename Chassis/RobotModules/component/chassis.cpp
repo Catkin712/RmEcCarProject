@@ -18,6 +18,7 @@ float g_steer_out_dbg[4] = {0.0f, 0.0f, 0.0f, 0.0f};    /* 舵角环输出 raw *
 float g_wheel_out_dbg[4] = {0.0f, 0.0f, 0.0f, 0.0f};    /* 轮速环输出 raw */
 float g_wheel_cmd_dbg[4] = {0.0f, 0.0f, 0.0f, 0.0f};    /* 轮速环目标 rad/s */
 float g_wheel_vel_dbg[4] = {0.0f, 0.0f, 0.0f, 0.0f};    /* 轮速环反馈 rad/s */
+float g_wheel_i_dbg[4] = {0.0f, 0.0f, 0.0f, 0.0f};      /* 轮速积分项 raw */
 float g_chassis_vel_dbg[3] = {0.0f, 0.0f, 0.0f};        /* vx, vy, w */
 uint8_t g_chassis_enabled_dbg = 0;                      /* enabled_ 的镜像 */
 
@@ -46,6 +47,9 @@ namespace robot
                 GetMotorWheel(i)->setInput(0);
             input_[i].steer = 0.0f;
             input_[i].wheel = 0.0f;
+            GetPidMotorWheel(i)->reset(); /* 失能后不保留起步积分 */
+            g_wheel_i_dbg[i] = 0.0f;
+            g_wheel_out_dbg[i] = 0.0f;
         }
     }
 
@@ -88,9 +92,16 @@ namespace robot
             input_[i].steer = GetPidMotorSteer(i)->calc(g_steer_target_dbg[i], cur[i]);
             GetMotorSteer(i)->setInput(input_[i].steer);
 
-            /* 轮速环 */
-            input_[i].wheel = GetPidMotorWheel(i)->calc(cmd_[i].speed,
-                                                        GetMotorWheel(i)->vel());
+            /* 轮速 PI：零速目标（含自锁）每拍清历史，不跨拍积累积分。
+             * 仍执行 calc，让比例项对实际残余轮速提供制动；失能走 stop。 */
+            auto *wheel_pid = GetPidMotorWheel(i);
+            if (fabsf(cmd_[i].speed) < kSpeedEps)
+            {
+                wheel_pid->reset();
+            }
+            input_[i].wheel = wheel_pid->calc(cmd_[i].speed,
+                                             GetMotorWheel(i)->vel());
+            g_wheel_i_dbg[i] = wheel_pid->i_term();
             GetMotorWheel(i)->setInput(input_[i].wheel);
 
             g_steer_out_dbg[i] = input_[i].steer;

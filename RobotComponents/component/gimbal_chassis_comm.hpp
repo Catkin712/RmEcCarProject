@@ -74,7 +74,7 @@ namespace robot
     {
       float yaw_rel = 0.0f; ///< 云台相对底盘的 yaw 关节角，rad
       float pitch = 0.0f;   ///< 云台 pitch 关节角，rad（水平为 0）
-      uint8_t mode = 0;     ///< 云台状态机：0 失能 / 1 随动 / 2 分离
+      uint8_t mode = 0;     ///< 云台状态机：0 失能 / 1 随动 / 2 小陀螺
       bool active = false;  ///< 云台是否处于工作状态
       bool aligning = false; ///< 随动模式下是否处于“底盘转到云台方向”阶段
       float joint_rate = 0.0f; ///< 关节角速度（底盘侧由相邻两帧差分得到，rad/s）
@@ -93,6 +93,10 @@ namespace robot
 
     /* 判断对方是否离线（超过阈值时长未收到新帧）。 */
     bool isOffline() const;
+    bool isJointOffline() const {
+      return joint_rx_cnt_ == 0U ||
+          (hello_world::tick::GetTickMs() - joint_prev_tick_) > 100U;
+    }
 
     /* 数据访问（供 RobotModules / Task 读写）。 */
     ChassisData &chassis_data() { return chassis_data_; }

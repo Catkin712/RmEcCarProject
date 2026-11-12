@@ -173,7 +173,11 @@ bool robot::GimbalChassisComm::decodeJoint(const uint8_t rx_data[8])
     const uint32_t dt = now - joint_prev_tick_;
     if ((dt >= 5U) && (dt <= 30U))
     {
-      joint_data_.joint_rate = (yaw_rel - joint_prev_rel_) * 1000.0f / static_cast<float>(dt);
+      float delta = yaw_rel - joint_prev_rel_;
+      constexpr float kPi = 3.14159265358979f;
+      if (delta > kPi) delta -= 2.0f * kPi;
+      else if (delta < -kPi) delta += 2.0f * kPi;
+      joint_data_.joint_rate = delta * 1000.0f / static_cast<float>(dt);
     }
   }
   joint_prev_rel_ = yaw_rel;

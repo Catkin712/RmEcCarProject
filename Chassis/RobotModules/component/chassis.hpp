@@ -41,7 +41,7 @@ namespace robot
         static constexpr float kWheelRadius = 0.066f;
         static constexpr float kHalfBase = 0.167f;
         static constexpr float kHalfTrack = 0.167f;
-        static constexpr float kMaxWheelSpeed = 40.0f;
+        static constexpr float kMaxWheelSpeed = 60.0f;
         static constexpr float kSpeedEps = 1e-3f;
         static constexpr float kTwoPi = 6.28318530718f;
 

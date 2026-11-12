@@ -70,6 +70,8 @@ namespace robot
         constexpr uint8_t kGimbalModeFollow = 1; ///< 随动：底盘跟随云台
         /* 段 2 里右摇杆转底盘的比例：满杆 6 rad/s × 0.5 = 3 rad/s */
         constexpr float kFollowStickScale = 0.5f;
+        constexpr uint8_t kGimbalModeSpin = 2U;
+        constexpr float kSpinYawRate = -8.0f; /* 顺时针，rad/s，低速试调值待实测 */
     } // namespace
 
     /* Ozone 观察用：跟随是否生效、当前误差 */
@@ -216,15 +218,11 @@ namespace robot
 
         case State::kWorking:
             cmd_vel_ = stick_to_velocity();
-            /* 底盘的转向只有两种来源，二者互斥：
-             *   随动(mode=1) 段1：底盘转到云台方向（云台锁绝对朝向，等着被追上）
-             *   随动(mode=1) 段2：右摇杆驱动底盘自旋，云台被带着一起转
-             *   分离(mode=2) / 云台失能：右摇杆归云台，底盘 w 恒 0
-             * 分离模式下底盘绝不能自旋：云台锁的是绝对朝向，底盘一转，
-             * θ_rel 就变，底盘会一直追着跑（之前“旋转随机”就是这么来的）。 */
+            /* mode=1：对齐时自动跟随，完成后右摇杆旋转。
+             * mode=2：顺时针自旋，左摇杆按云台朝向平移。 */
             {
                 robot::GimbalChassisComm *comm = GetGimbalChassisComm();
-                const bool gimbal_ok = (comm != nullptr) && !comm->isOffline() &&
+                const bool gimbal_ok = (comm != nullptr) && !comm->isOffline() && !comm->isJointOffline() &&
                                        comm->joint_data().active;
                 const bool follow_mode = gimbal_ok && (comm->joint_data().mode == kGimbalModeFollow);
                 const bool aligning = follow_mode && comm->joint_data().aligning;
@@ -289,10 +287,24 @@ namespace robot
                     }
                     cmd_vel_.w = stick;
                 }
+                else if (gimbal_ok && comm->joint_data().mode == kGimbalModeSpin)
+                {
+                    /* 云台坐标系平移向量旋转到车体坐标系；q=云台相对车体角。 */
+                    const float q = WrapPi(comm->joint_data().yaw_rel);
+                    const float c = cosf(q);
+                    const float s = sinf(q);
+                    const float vx = cmd_vel_.vx;
+                    const float vy = cmd_vel_.vy;
+                    cmd_vel_.vx = c * vx - s * vy;
+                    cmd_vel_.vy = s * vx + c * vy;
+                    cmd_vel_.w = kSpinYawRate;
+                }
                 else
                 {
-                    /* 分离：右摇杆归云台，底盘不转 */
+                    /* 小陀螺失去有效方向/使能时同时撤销平移与自旋。 */
                     cmd_vel_.w = 0.0f;
+                    if (comm->joint_data().mode == kGimbalModeSpin)
+                        cmd_vel_ = Chassis::Velocity{};
                 }
             }
             if (fabsf(cmd_vel_.vx) < kStickDeadband && fabsf(cmd_vel_.vy) < kStickDeadband && fabsf(cmd_vel_.w) < kStickDeadband)

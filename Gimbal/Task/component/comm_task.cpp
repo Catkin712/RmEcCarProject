@@ -17,15 +17,15 @@
 
 #include <cmath> /* fabsf */
 
-#include "DT7.hpp"      /* DT7::rc_xxx()，协议层不直接依赖它 */
-#include "HW_can.hpp"   /* CanFilter_Init / CAN_Send_Msg */
-#include "can.h"        /* hcan1 / hcan2 */
-#include "ins_comm.hpp" /* GetRemoteControl */
-#include "ins_motor.hpp"     /* GetMotorYaw / GetMotorPitch */
-#include "imu.hpp"           /* 完整类型：yaw() / is_ok() */
-#include "ins_imu.hpp"       /* GetImu */
-#include "motor_DaMiao.hpp"  /* 完整类型：setMitInput / encode / tx_id */
-#include "usart.h"      /* huart3 */
+#include "DT7.hpp"          /* DT7::rc_xxx()，协议层不直接依赖它 */
+#include "HW_can.hpp"       /* CanFilter_Init / CAN_Send_Msg */
+#include "can.h"            /* hcan1 / hcan2 */
+#include "ins_comm.hpp"     /* GetRemoteControl */
+#include "ins_motor.hpp"    /* GetMotorYaw / GetMotorPitch */
+#include "imu.hpp"          /* 完整类型：yaw() / is_ok() */
+#include "ins_imu.hpp"      /* GetImu */
+#include "motor_DaMiao.hpp" /* 完整类型：setMitInput / encode / tx_id */
+#include "usart.h"          /* huart3 */
 #include "iwdg.h"
 #include "tick.hpp" /* hello_world::tick::GetTickMs() */
 
@@ -34,59 +34,59 @@
 
 namespace
 {
-/* 云台控制参数（2026-11-05 实测标定） */
-/* pitch 机械行程（水平为 0 的关节角，见 ins_motor.cpp 的 kPitchAngleOffset）：
- * 实测上限 -2.6815 → +0.231（抬 13.2°），下限 -3.0494 → -0.137（压 7.9°）。
- * 软件限位两端各留约 1.7° 余量，防止顶死结构。 */
-constexpr float kPitchLimitMax = 0.20f;  /* 抬头极限 */
-constexpr float kPitchLimitMin = -0.10f; /* 低头极限 */
-constexpr float kPitchRate = 1.5f;    /* 摇杆满程时俯仰角速度，rad/s */
-constexpr float kYawRate = 6.0f;      /* 摇杆满程时 yaw 角速度，rad/s */
-constexpr float kRcDeadBand = 0.05f;  /* 摇杆死区 */
-constexpr float kPitchKp = 40.0f;     /* MIT 内置 PD：kp ∈ [0, 500] */
-constexpr float kPitchKd = 1.0f;      /* kd ∈ [0, 5] */
-constexpr float kYawFollowKp = 6.0f;     /* 随动：误差(rad) → 角速度(rad/s) */
-constexpr float kYawFollowVelMax = 8.0f; /* 随动最大跟踪角速度，rad/s */
-constexpr float kYawErrDeadBand = 0.005f;/* 误差死区，防止到位后嗡嗡抖 */
-constexpr float kYawVelKd = 2.0f;        /* 速度环阻尼（随动/分离共用） */
-/* 分离模式：锁 IMU 绝对朝向的比例环 */
-constexpr float kYawFreeKp = 6.0f;           /* 误差(rad) → 角速度(rad/s) */
-constexpr float kYawFreeVelMax = 8.0f;       /* 最大补偿角速度，rad/s */
-constexpr float kYawFreeErrDeadBand = 0.01f; /* 约 0.6°，防止到位后嗡嗡抖 */
-constexpr float kPi = 3.14159265358979f;
-constexpr uint32_t kGimbalJointTxId = 0x103U; /* 云台→底盘：关节状态帧 */
-constexpr float kDt = 0.001f;         /* TIM6 = 1 kHz，固定步长 */
+  /* 云台控制参数（2026-11-05 实测标定） */
+  /* pitch 机械行程（水平为 0 的关节角，见 ins_motor.cpp 的 kPitchAngleOffset）：
+   * 实测上限 -2.6815 → +0.231（抬 13.2°），下限 -3.0494 → -0.137（压 7.9°）。
+   * 软件限位两端各留约 1.7° 余量，防止顶死结构。 */
+  constexpr float kPitchLimitMax = 0.20f;   /* 抬头极限 */
+  constexpr float kPitchLimitMin = -0.10f;  /* 低头极限 */
+  constexpr float kPitchRate = 1.5f;        /* 摇杆满程时俯仰角速度，rad/s */
+  constexpr float kYawRate = 6.0f;          /* 摇杆满程时 yaw 角速度，rad/s */
+  constexpr float kRcDeadBand = 0.05f;      /* 摇杆死区 */
+  constexpr float kPitchKp = 40.0f;         /* MIT 内置 PD：kp ∈ [0, 500] */
+  constexpr float kPitchKd = 1.0f;          /* kd ∈ [0, 5] */
+  constexpr float kYawFollowKp = 6.0f;      /* 随动：误差(rad) → 角速度(rad/s) */
+  constexpr float kYawFollowVelMax = 8.0f;  /* 随动最大跟踪角速度，rad/s */
+  constexpr float kYawErrDeadBand = 0.005f; /* 误差死区，防止到位后嗡嗡抖 */
+  constexpr float kYawVelKd = 2.0f;         /* 速度环阻尼（随动/小陀螺共用） */
+  /* 小陀螺模式：锁 IMU 绝对朝向的比例环 */
+  constexpr float kYawFreeKp = 6.0f;           /* 误差(rad) → 角速度(rad/s) */
+  constexpr float kYawFreeVelMax = 12.0f;      /* 最大补偿角速度，rad/s */
+  constexpr float kYawFreeErrDeadBand = 0.01f; /* 约 0.6°，防止到位后嗡嗡抖 */
+  constexpr float kPi = 3.14159265358979f;
+  constexpr uint32_t kGimbalJointTxId = 0x103U; /* 云台→底盘：关节状态帧 */
+  constexpr float kDt = 0.001f;                 /* TIM6 = 1 kHz，固定步长 */
 
-/* 摇杆死区 + 重新线性映射：死区外从 0 平滑到 1，避免"一过死区就跳" */
-inline float ApplyDeadBand(float v)
-{
-  const float a = (v < 0.0f) ? -v : v;
-  if (a < kRcDeadBand)
+  /* 摇杆死区 + 重新线性映射：死区外从 0 平滑到 1，避免"一过死区就跳" */
+  inline float ApplyDeadBand(float v)
   {
-    return 0.0f;
+    const float a = (v < 0.0f) ? -v : v;
+    if (a < kRcDeadBand)
+    {
+      return 0.0f;
+    }
+    return (v > 0.0f) ? (v - kRcDeadBand) / (1.0f - kRcDeadBand)
+                      : (v + kRcDeadBand) / (1.0f - kRcDeadBand);
   }
-  return (v > 0.0f) ? (v - kRcDeadBand) / (1.0f - kRcDeadBand)
-                    : (v + kRcDeadBand) / (1.0f - kRcDeadBand);
-}
 
-inline float Bound(float v, float lo, float hi)
-{
-  return (v < lo) ? lo : ((v > hi) ? hi : v);
-}
+  inline float Bound(float v, float lo, float hi)
+  {
+    return (v < lo) ? lo : ((v > hi) ? hi : v);
+  }
 
-/* 把角度折回 (-π, π]，与电机层的 normAngle 语义一致 */
-inline float WrapPi(float a)
-{
-  while (a > kPi)
+  /* 把角度折回 (-π, π]，与电机层的 normAngle 语义一致 */
+  inline float WrapPi(float a)
   {
-    a -= 2.0f * kPi;
+    while (a > kPi)
+    {
+      a -= 2.0f * kPi;
+    }
+    while (a < -kPi)
+    {
+      a += 2.0f * kPi;
+    }
+    return a;
   }
-  while (a < -kPi)
-  {
-    a += 2.0f * kPi;
-  }
-  return a;
-}
 } // namespace
 
 /* Private variables ---------------------------------------------------------*/
@@ -94,8 +94,8 @@ static uint8_t dbus_rx_buf[hello_world::remote_control::kRcRxDataLen];
 /* 三个状态量：放在文件作用域、用 static（不用匿名 namespace），
  * 这样 Ozone 的表达式里直接写 g_comm_armed 就能找到，不会显示成
  * "(anonymous namespace)::g_comm_armed"。 */
-static volatile bool g_comm_armed = false; /* 是否已收到过有效帧 */
-static uint32_t g_boot_tick = 0;           /* CommTaskInit 里记录的开机时刻 */
+static volatile bool g_comm_armed = false;         /* 是否已收到过有效帧 */
+static uint32_t g_boot_tick = 0;                   /* CommTaskInit 里记录的开机时刻 */
 static constexpr uint32_t kStartupGraceMs = 2000U; /* 开机宽限期 */
 /* 看门狗判据：最近一次"有效通讯"的时刻。喂狗只看它够不够新：
  * 通讯新鲜 = 解包中断活着；喂狗在主循环 = 主循环也活着。缺一个就复位。 */
@@ -107,9 +107,9 @@ static volatile uint32_t g_reset_cause = 0;
 static volatile uint32_t g_dbg_hang = 0;
 /* 复位后安全闩：必须先把左拨杆离开最上、再推到最上，才允许使能。
  * 否则看门狗复位/重新上电时，若拨杆还停在上方，云台会立刻重新抱死。 */
-static bool g_seen_safe = false;                 /* 见过"不在最上"的合法帧 */
-static bool g_arm_latch = false;                 /* 已完成一次 上→下→上 */
-static volatile uint8_t g_arm_unlocked_dbg = 0;  /* 1 = 允许使能 */
+static bool g_seen_safe = false;                /* 见过"不在最上"的合法帧 */
+static bool g_arm_latch = false;                /* 已完成一次 上→下→上 */
+static volatile uint8_t g_arm_unlocked_dbg = 0; /* 1 = 允许使能 */
 /* Ozone 观察用 */
 static volatile uint32_t rc_rx_cnt = 0;  /* 成功解包的帧数 */
 static volatile uint32_t rc_err_cnt = 0; /* 长度不对、被丢弃的次数 */
@@ -117,47 +117,96 @@ static volatile uint32_t tick_now = 0;
 static volatile uint32_t link_tx_cnt = 0; /* 已发出的 0x102 帧数 */
 
 /* 云台关节自检用的观察量（Ozone 输入名字即可） */
-static volatile uint32_t g_yaw_tx_cnt = 0;    /* yaw MIT 帧成功入邮箱次数 */
+static volatile uint32_t g_yaw_tx_cnt = 0; /* yaw MIT 帧成功入邮箱次数 */
 /* 0x103 关节状态帧的发送计数与镜像 */
 static uint32_t g_joint_div = 0;
 static volatile uint32_t g_joint_tx_cnt = 0;
 static volatile float g_joint_yaw_dbg = 0.0f;
-static volatile uint32_t g_pitch_tx_cnt = 0;  /* pitch MIT 帧成功入邮箱次数 */
+static volatile uint32_t g_pitch_tx_cnt = 0;    /* pitch MIT 帧成功入邮箱次数 */
 static volatile float g_yaw_angle_dbg = 0.0f;   /* yaw 反馈角（rad） */
 static volatile float g_pitch_angle_dbg = 0.0f; /* pitch 反馈角（rad） */
 static volatile float g_yaw_vel_dbg = 0.0f;
 static volatile float g_pitch_vel_dbg = 0.0f;
-static volatile uint8_t g_yaw_enabled_dbg = 0;   /* 1=已使能 */
+static volatile uint8_t g_yaw_enabled_dbg = 0; /* 1=已使能 */
 static volatile uint8_t g_pitch_enabled_dbg = 0;
-static volatile uint32_t g_yaw_tx_id_dbg = 0;   /* 本帧用的发送 ID */
+static volatile uint32_t g_yaw_tx_id_dbg = 0; /* 本帧用的发送 ID */
 static volatile uint32_t g_pitch_tx_id_dbg = 0;
 /* 控制环的中间量（也是 Ozone 观察点） */
 static volatile float g_pitch_des_dbg = 0.0f;   /* pitch 目标角（rad） */
 static volatile float g_yaw_vel_des_dbg = 0.0f; /* yaw 目标角速度（rad/s） */
 static volatile uint8_t g_gimbal_active_dbg = 0;
 
-/* 云台状态机：0=失能/急停，1=随动，2=分离 */
-enum class GimbalMode : uint8_t {
+/* 云台状态机：0=失能/急停，1=随动，2=小陀螺 */
+enum class GimbalMode : uint8_t
+{
   kDisabled = 0U,
   kFollow = 1U,
-  kFree = 2U,
+  kSpin = 2U,
 };
 static GimbalMode g_mode = GimbalMode::kDisabled;
-static volatile uint8_t g_mode_dbg = 0U;     /* Ozone 观察：当前模式 */
-static volatile float g_yaw_des_dbg = 0.0f;  /* 随动模式的相对角目标（rad） */
-static volatile float g_yaw_err_dbg = 0.0f;  /* 随动的角度误差（rad） */
-/* 分离模式：锁定的绝对朝向（IMU yaw，rad）与观察量 */
-static float g_yaw_free_lock = 0.0f;              /* 进入分离时锁定的绝对朝向 */
+static volatile uint8_t g_mode_dbg = 0U;    /* Ozone 观察：当前模式 */
+static volatile float g_yaw_des_dbg = 0.0f; /* 随动模式的相对角目标（rad） */
+static volatile float g_yaw_err_dbg = 0.0f; /* 随动的角度误差（rad） */
+/* 小陀螺模式：锁定的绝对朝向（IMU yaw，rad）与观察量 */
+static float g_yaw_free_lock = 0.0f; /* 进入小陀螺时锁定的绝对朝向 */
 /* 随动（底盘跟随）的两段式状态 */
-static float g_yaw_follow_lock = 0.0f;            /* 对齐阶段锁定的绝对朝向 */
-static bool g_follow_aligning = false;            /* true = 正在等底盘转过来 */
-static volatile uint8_t g_follow_aligning_dbg = 0;/* Ozone：1 = 对齐阶段 */
-static constexpr float kAlignEnterRad = 0.12f;    /* 超过这个误差 → 进入对齐阶段 */
-static constexpr float kAlignExitRad = 0.03f;     /* 低于这个误差 → 认为已对齐 */
-static constexpr float kAlignExitRate = 0.10f;    /* 关节角速度低于此值才算"底盘真的停了"，rad/s */
-static volatile float g_align_rate_dbg = 0.0f;    /* 关节角速度（= 对齐阶段底盘的转速） */
-static volatile float g_yaw_free_yaw_dbg = 0.0f;  /* IMU 当前绝对朝向 */
-static volatile float g_yaw_free_err_dbg = 0.0f;  /* 锁定值 − 当前值（rad） */
+static float g_yaw_follow_lock = 0.0f;             /* 对齐阶段锁定的绝对朝向 */
+static bool g_follow_aligning = false;             /* true = 正在等底盘转过来 */
+static volatile uint8_t g_follow_aligning_dbg = 0; /* Ozone：1 = 对齐阶段 */
+static constexpr float kAlignEnterRad = 0.12f;     /* 超过这个误差 → 进入对齐阶段 */
+static constexpr float kAlignExitRad = 0.03f;      /* 低于这个误差 → 认为已对齐 */
+static constexpr float kAlignExitRate = 0.10f;     /* 关节角速度低于此值才算"底盘真的停了"，rad/s */
+static volatile float g_align_rate_dbg = 0.0f;     /* 关节相对角速度，不能直接当作底盘转速 */
+/* 运动补偿试验开关：默认关闭。仅在静止时开启，先核对估计转速的方向/量程。
+ * 此开关仅管随动第一阶段；小陀螺始终使用运动补偿。 */
+static volatile uint8_t g_yaw_motion_comp_enable = 1U;
+static volatile uint8_t g_yaw_rate_valid_dbg = 0U;
+static volatile float g_yaw_abs_rate_dbg = 0.0f;         /* IMU 欧拉 yaw 变化率，rad/s */
+static volatile float g_chassis_yaw_rate_est_dbg = 0.0f; /* 底盘转速估计，rad/s */
+static volatile float g_yaw_comp_rate_dbg = 0.0f;        /* 本拍叠加的关节速度补偿 */
+static float g_chassis_yaw_rate_filtered = 0.0f;
+
+/* TIM6 每 1 ms 调用：先由已校正安装方向的陀螺仪求欧拉 yaw 变化率，
+ * 再用 omega_chassis = omega_gimbal - joint_rate 估计底盘运动。
+ * 适用于车体近水平、yaw 关节轴近似竖直的测试条件；坡面需另做坐标变换。 */
+static void UpdateYawMotionEstimate(float joint_rate)
+{
+  const auto *imu = GetImu();
+  g_yaw_rate_valid_dbg = 0U;
+  g_yaw_abs_rate_dbg = 0.0f;
+  g_chassis_yaw_rate_est_dbg = 0.0f;
+
+  if (imu->is_ok() && imu->is_calibrated())
+  {
+    const float *gyro = imu->gyro();
+    const float *bias = imu->gyro_bias();
+    const float roll = imu->roll();
+    const float cos_pitch = cosf(imu->pitch());
+    /* 避免欧拉角接近竖直时除以接近零的数。 */
+    if (std::isfinite(roll) && std::isfinite(cos_pitch) &&
+        fabsf(cos_pitch) > 0.5f)
+    {
+      const float abs_rate = ((gyro[1] - bias[1]) * sinf(roll) +
+                              (gyro[2] - bias[2]) * cosf(roll)) /
+                             cos_pitch;
+      if (std::isfinite(abs_rate) && std::isfinite(joint_rate))
+      {
+        constexpr float kMotionFilterTau = 0.020f; /* 20 ms 初始试验值，待实测 */
+        constexpr float kMotionFilterAlpha = kDt / (kMotionFilterTau + kDt);
+        const float chassis_rate = abs_rate - joint_rate;
+        g_chassis_yaw_rate_filtered +=
+            kMotionFilterAlpha * (chassis_rate - g_chassis_yaw_rate_filtered);
+        g_yaw_abs_rate_dbg = abs_rate;
+        g_chassis_yaw_rate_est_dbg = g_chassis_yaw_rate_filtered;
+        g_yaw_rate_valid_dbg = 1U;
+        return;
+      }
+    }
+  }
+  g_chassis_yaw_rate_filtered = 0.0f;
+}
+static volatile float g_yaw_free_yaw_dbg = 0.0f; /* IMU 当前绝对朝向 */
+static volatile float g_yaw_free_err_dbg = 0.0f; /* 锁定值 − 当前值（rad） */
 /* 排查用：Ozone 里把 g_dbg_force_follow 改成 1，可无视拨杆强制进随动 */
 static volatile uint8_t g_dbg_force_follow = 0U;
 static volatile uint8_t g_rc_l_switch_dbg = 0U; /* 左拨杆原始值 1=上 3=中 2=下 */
@@ -217,8 +266,8 @@ void CommTask(void)
  * @brief   云台关节环 + 模式状态机（1 kHz）
  * @note    模式由左/右拨杆决定：
  *            左拨杆最上            → 允许使能，否则失能（零力矩可手转）
- *            右拨杆 上 / 中 / 下   → 随动 / 分离 / 急停
- *          yaw：随动=相对角位置环，分离=阻尼速度环；
+ *            右拨杆 上 / 中 / 下   → 随动 / 小陀螺 / 急停
+ *          yaw：随动分两阶段，小陀螺锁绝对朝向并补偿底盘运动；
  *          pitch：与 yaw 模式无关，使能时是带软件限位的位置环。
  */
 void GimbalTask(void)
@@ -234,6 +283,8 @@ void GimbalTask(void)
   g_pitch_angle_dbg = pitch->angle();
   g_yaw_vel_dbg = yaw->vel();
   g_pitch_vel_dbg = pitch->vel();
+  UpdateYawMotionEstimate(g_yaw_vel_dbg);
+  g_yaw_comp_rate_dbg = 0.0f;
   g_yaw_enabled_dbg = yaw->is_enabled() ? 1U : 0U;
   g_pitch_enabled_dbg = pitch->is_enabled() ? 1U : 0U;
 
@@ -264,15 +315,15 @@ void GimbalTask(void)
   {
     switch (rc->rc_r_switch())
     {
-      case hello_world::remote_control::kSwitchStateUp:
-        mode = GimbalMode::kFollow; /* 随动：云台相对底盘锁角 */
-        break;
-      case hello_world::remote_control::kSwitchStateMid:
-        mode = GimbalMode::kFree; /* 分离：云台不锁角，只阻尼 */
-        break;
-      default: /* 右拨杆最下 = 急停 */
-        mode = GimbalMode::kDisabled;
-        break;
+    case hello_world::remote_control::kSwitchStateUp:
+      mode = GimbalMode::kFollow; /* 随动：云台相对底盘锁角 */
+      break;
+    case hello_world::remote_control::kSwitchStateMid:
+      mode = GimbalMode::kSpin; /* 小陀螺：底盘自旋，云台锁绝对朝向 */
+      break;
+    default: /* 右拨杆最下 = 急停 */
+      mode = GimbalMode::kDisabled;
+      break;
     }
   }
 
@@ -280,6 +331,11 @@ void GimbalTask(void)
   if (g_dbg_force_follow != 0U)
   {
     mode = GimbalMode::kFollow;
+  }
+  /* 绝对朝向保持不可用时禁止小陀螺，0x103 会通知底盘撤销自旋。 */
+  if (mode == GimbalMode::kSpin && g_yaw_rate_valid_dbg == 0U)
+  {
+    mode = GimbalMode::kDisabled;
   }
   g_rc_l_switch_dbg = static_cast<uint8_t>(rc->rc_l_switch());
   g_rc_r_switch_dbg = static_cast<uint8_t>(rc->rc_r_switch());
@@ -290,9 +346,9 @@ void GimbalTask(void)
     g_yaw_des_dbg = g_yaw_angle_dbg;
     g_pitch_des_dbg = Bound(g_pitch_angle_dbg, kPitchLimitMin, kPitchLimitMax);
     /* 清掉上一次随动的"对齐中"状态。
-     * 不清的话：在随动里对齐到一半切去分离，g_follow_aligning 还留着 true，
+     * 不清的话：在随动里对齐到一半切去小陀螺，g_follow_aligning 还留着 true，
      * 再切回随动时不会重新锁存朝向，而是拿旧的锁去算误差——云台会一路
-     * 拽回"分离前的角度"。清掉后由 kFollow 分支按当前 rel 重新判定/锁存。 */
+     * 拽回"小陀螺前的角度"。清掉后由 kFollow 分支按当前 rel 重新判定/锁存。 */
     g_follow_aligning = false;
     g_follow_aligning_dbg = 0U;
     if (mode == GimbalMode::kFollow)
@@ -307,10 +363,10 @@ void GimbalTask(void)
         g_yaw_follow_lock = GetImu()->yaw();
       }
     }
-    if (mode == GimbalMode::kFree)
+    if (mode == GimbalMode::kSpin)
     {
-      /* 进入分离的瞬间：把"当前绝对朝向"记为锁定值。
-       * 不这么做的话，第一次进分离就会朝 IMU 的零位（开机时的朝向）拽。 */
+      /* 进入小陀螺的瞬间：把"当前绝对朝向"记为锁定值。
+       * 不这么做的话，第一次进小陀螺就会朝 IMU 的零位（开机时的朝向）拽。 */
       g_yaw_free_lock = GetImu()->yaw();
     }
     g_mode = mode;
@@ -322,93 +378,103 @@ void GimbalTask(void)
 
   switch (mode)
   {
-    case GimbalMode::kFollow:
+  case GimbalMode::kFollow:
+  {
+    /* 随动 = 底盘跟随云台，分两段：
+     *   段 1（对齐）：|θ_rel| 大 → 云台锁 **IMU 绝对朝向**，转子先不动，
+     *        让底盘自己去转，把 θ_rel 拉回 0；
+     *   段 2（锁定）：|θ_rel| 小 → 云台改锁 **关节角 0**，与底盘刚性相连，
+     *        之后底盘一转，云台被带着一起转。
+     * 摇杆在随动模式下不再驱动云台：右摇杆交给底盘自旋。 */
+    const float rel = WrapPi(g_yaw_angle_dbg);
+
+    /* 关节角速度。对齐阶段云台锁着绝对朝向，底盘还在转的话，
+     * 云台确实静止时，相对角速度约等于底盘转速的负值。
+     * 云台也在运动时，单看相对速度不能证明底盘停稳。 */
+    const float joint_rate = yaw->vel();
+    g_align_rate_dbg = joint_rate;
+
+    if (!g_follow_aligning && (fabsf(rel) > kAlignEnterRad))
     {
-      /* 随动 = 底盘跟随云台，分两段：
-       *   段 1（对齐）：|θ_rel| 大 → 云台锁 **IMU 绝对朝向**，转子先不动，
-       *        让底盘自己去转，把 θ_rel 拉回 0；
-       *   段 2（锁定）：|θ_rel| 小 → 云台改锁 **关节角 0**，与底盘刚性相连，
-       *        之后底盘一转，云台被带着一起转。
-       * 摇杆在随动模式下不再驱动云台：右摇杆交给底盘自旋。 */
-      const float rel = WrapPi(g_yaw_angle_dbg);
-
-      /* 关节角速度。对齐阶段云台锁着绝对朝向，底盘还在转的话，
-       * 电机测到的相对角速度就等于底盘当前的转速——用它判断"底盘停没停"。 */
-      const float joint_rate = yaw->vel();
-      g_align_rate_dbg = joint_rate;
-
-      if (!g_follow_aligning && (fabsf(rel) > kAlignEnterRad))
-      {
-        /* 进入对齐段：以"此刻的绝对朝向"为锁，避免云台回弹到更早的朝向 */
-        g_follow_aligning = true;
-        g_yaw_follow_lock = GetImu()->yaw();
-      }
-      else if (g_follow_aligning && (fabsf(rel) < kAlignExitRad) &&
-               (fabsf(joint_rate) < kAlignExitRate))
-      {
-        /* 角度对齐 + 底盘基本停住，才把云台从"锁绝对"释放成"锁关节"。
-         * 只看角度就释放的话，底盘还带着惯性转，云台会被拖着走一段角度。 */
-        g_follow_aligning = false;
-      }
-      g_follow_aligning_dbg = g_follow_aligning ? 1U : 0U;
-
-      float err = 0.0f;
-      if (g_follow_aligning && GetImu()->is_ok())
-      {
-        /* 锁绝对朝向：底盘转过来，θ_rel 自然减小 */
-        err = WrapPi(g_yaw_follow_lock - GetImu()->yaw());
-      }
-      else
-      {
-        /* 已对齐（或 IMU 不可用）：锁关节角 0，跟底盘刚性相连 */
-        err = -rel;
-      }
-      g_yaw_err_dbg = err;
-      g_yaw_des_dbg = 0.0f;
-
-      if (fabsf(err) > kYawErrDeadBand)
-      {
-        yaw_vel_des = Bound(kYawFollowKp * err, -kYawFollowVelMax, kYawFollowVelMax);
-      }
-      (void)yaw->setMitInput(0.0f, yaw_vel_des, 0.0f, kYawVelKd, 0.0f);
-      break;
+      /* 进入对齐段：以"此刻的绝对朝向"为锁，避免云台回弹到更早的朝向 */
+      g_follow_aligning = true;
+      g_yaw_follow_lock = GetImu()->yaw();
     }
-    case GimbalMode::kFree:
+    else if (g_follow_aligning && (fabsf(rel) < kAlignExitRad) &&
+             (fabsf(joint_rate) < kAlignExitRate))
     {
-      /* 分离：锁 **IMU 绝对朝向**（不是相对底盘的角度）。
-       * yaw 关节编码器只有相对角，要锁绝对朝向只能靠板载 IMU。
-       * 摇杆只改"锁定值"：人想转云台就转，松手后锁住新的绝对朝向。
-       * 与随动同样不用 MIT 位置模式，只把电机当速度执行器。 */
-      if (!GetImu()->is_ok())
-      {
-        /* IMU 没就绪时退回纯阻尼，至少不会乱转 */
-        yaw_vel_des = -ApplyDeadBand(rc->rc_rh()) * kYawRate;
-        (void)yaw->setMitInput(0.0f, yaw_vel_des, 0.0f, kYawVelKd, 0.0f);
-        break;
-      }
+      /* 角度对齐 + 底盘基本停住，才把云台从"锁绝对"释放成"锁关节"。
+       * 只看角度就释放的话，底盘还带着惯性转，云台会被拖着走一段角度。 */
+      g_follow_aligning = false;
+    }
+    g_follow_aligning_dbg = g_follow_aligning ? 1U : 0U;
 
-      const float yaw_abs = GetImu()->yaw();
-      g_yaw_free_lock -= ApplyDeadBand(rc->rc_rh()) * kYawRate * kDt;
-      g_yaw_free_yaw_dbg = yaw_abs;
-      const float err = WrapPi(g_yaw_free_lock - yaw_abs);
-      g_yaw_free_err_dbg = err;
-      if (fabsf(err) > kYawFreeErrDeadBand)
-      {
-        yaw_vel_des = Bound(kYawFreeKp * err, -kYawFreeVelMax, kYawFreeVelMax);
-      }
-      else
-      {
-        yaw_vel_des = 0.0f;
-      }
-      (void)yaw->setMitInput(0.0f, yaw_vel_des, 0.0f, kYawVelKd, 0.0f);
-      break;
-    }
-    default:
+    float err = 0.0f;
+    if (g_follow_aligning && GetImu()->is_ok())
     {
-      /* 失能/急停：零力矩，可手转 */
-      (void)yaw->setMitInput(0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
-      break;
+      /* 锁绝对朝向：底盘转过来，θ_rel 自然减小 */
+      err = WrapPi(g_yaw_follow_lock - GetImu()->yaw());
     }
+    else
+    {
+      /* 已对齐（或 IMU 不可用）：锁关节角 0，跟底盘刚性相连 */
+      err = -rel;
+    }
+    g_yaw_err_dbg = err;
+    g_yaw_des_dbg = 0.0f;
+
+    if (fabsf(err) > kYawErrDeadBand)
+    {
+      yaw_vel_des = Bound(kYawFollowKp * err, -kYawFollowVelMax, kYawFollowVelMax);
+    }
+    /* 第一阶段：把绝对角环要求的速度转换成关节相对速度。
+     * 即使角度误差进入死区，底盘还在转也需要反向补偿。
+     * 默认关闭；开启后仍使用原有最终速度限幅。 */
+    if (g_follow_aligning && g_yaw_motion_comp_enable != 0U &&
+        g_yaw_rate_valid_dbg != 0U)
+    {
+      g_yaw_comp_rate_dbg = -g_chassis_yaw_rate_est_dbg;
+      yaw_vel_des = Bound(yaw_vel_des + g_yaw_comp_rate_dbg,
+                          -kYawFollowVelMax, kYawFollowVelMax);
+    }
+    (void)yaw->setMitInput(0.0f, yaw_vel_des, 0.0f, kYawVelKd, 0.0f);
+    break;
+  }
+  case GimbalMode::kSpin:
+  {
+    /* 小陀螺：锁 **IMU 绝对朝向**（不是相对底盘的角度）。
+     * yaw 关节编码器只有相对角，要锁绝对朝向只能靠板载 IMU。
+     * 右摇杆水平改变绝对朝向目标，松手后保持新的目标。
+     * 与随动同样不用 MIT 位置模式，只把电机当速度执行器。 */
+    const float yaw_abs = GetImu()->yaw();
+    /* 遥控角速度积分成世界系朝向目标；回中后目标不再变化。
+     * 沿用原摇杆方向，折回 ±pi 避免长时间累加损失浮点精度。 */
+    g_yaw_free_lock = WrapPi(g_yaw_free_lock -
+                             ApplyDeadBand(rc->rc_rh()) * kYawRate * kDt);
+    g_yaw_free_yaw_dbg = yaw_abs;
+    const float err = WrapPi(g_yaw_free_lock - yaw_abs);
+    g_yaw_free_err_dbg = err;
+    if (fabsf(err) > kYawFreeErrDeadBand)
+    {
+      yaw_vel_des = Bound(kYawFreeKp * err, -kYawFreeVelMax, kYawFreeVelMax);
+    }
+    else
+    {
+      yaw_vel_des = 0.0f;
+    }
+    /* 绝对速度目标转为关节相对速度；死区内也需要抵消底盘运动。 */
+    g_yaw_comp_rate_dbg = -g_chassis_yaw_rate_est_dbg;
+    yaw_vel_des = Bound(yaw_vel_des + g_yaw_comp_rate_dbg,
+                        -kYawFreeVelMax, kYawFreeVelMax);
+    (void)yaw->setMitInput(0.0f, yaw_vel_des, 0.0f, kYawVelKd, 0.0f);
+    break;
+  }
+  default:
+  {
+    /* 失能/急停：零力矩，可手转 */
+    (void)yaw->setMitInput(0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
+    break;
+  }
   }
 
   /* ④ pitch：与 yaw 模式解耦；只要不是急停就按摇杆积分 + 限位
